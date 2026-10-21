@@ -15,6 +15,20 @@ go build -o 2o .
 # or ./2o ssh -p 222 arthur@78.123.62.14
 ```
 
+If Go is absent on the SSH-origin desktop, compile **on a Linux machine with Go** for that desktop's architecture (`uname -m` gives `x86_64` → `amd64`, `aarch64` → `arm64`) and copy the binary back. Example with a Linux amd64 desktop and this checkout on `omarchy`:
+
+```sh
+# on omarchy, from the 2o checkout:
+mkdir -p build
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/2o-linux-amd64 .
+# on your desktop, with SSH access to omarchy:
+scp omarchy:~/Documents/2o/build/2o-linux-amd64 ~/Documents/2o/2o
+chmod +x ~/Documents/2o/2o
+~/Documents/2o/2o ssh omarchy
+```
+
+The binary belongs on the **SSH-origin desktop**; `2o ssh` installs the server copy automatically. If the remote Linux server has a different CPU architecture, cross-building its copy at connection time additionally requires Go and this source checkout on the SSH-origin desktop.
+
 In the shell opened by `2o ssh`, run `2o status` to check the exact forwarded socket, then `2o open report.pdf`. If you are already in a normal `ssh omarchy` shell, exit that shell first and reconnect from your desktop using `2o ssh omarchy`. An existing SSH connection cannot be retrofitted by running the wrapper on its server side.
 
 `2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, creates a private per-session Unix socket on the server, and adds an SSH remote Unix-socket forward. **Before presenting a remote shell it sends a ping through that exact socket**; a rejected or broken forward now fails immediately, with its path and OS error. Inside the shell `TWO_O_SOCK` and `BROWSER` are exported. No TCP listener, no SFTP login; SSH must permit remote Unix-socket forwarding (OpenSSH `AllowStreamLocalForwarding`, or the corresponding Tailscale SSH policy). The daemon uses `$XDG_RUNTIME_DIR/2o.sock` or a private temp directory if unset. You can run `./2o daemon` from your desktop session explicitly.
