@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,23 +23,8 @@ func TestEditConflictKeepsLocalRecoveryCopy(t *testing.T) {
 	t.Setenv("TWO_O_EDITOR", editor)
 	t.Setenv("TWO_O_TEST_REMOTE", remote)
 	t.Setenv("SSH_CONNECTION", "loopback")
-	sock := filepath.Join(dir, "2o.sock")
-	t.Setenv("TWO_O_SOCK", sock)
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		c, e := l.Accept()
-		if e == nil {
-			defer c.Close()
-			serve(c)
-		}
-	}()
-	err = editFile(remote)
+	startDesktop(t)
+	err := editFile(remote)
 	if err == nil || !strings.Contains(err.Error(), "edit conflict") || !strings.Contains(err.Error(), "recovery copy:") {
 		t.Fatalf("expected conflict with recovery path, got %v", err)
 	}
@@ -56,5 +40,4 @@ func TestEditConflictKeepsLocalRecoveryCopy(t *testing.T) {
 	if readErr != nil || string(current) != "someone else changed it" {
 		t.Fatalf("remote file %q: %v", current, readErr)
 	}
-	<-done
 }

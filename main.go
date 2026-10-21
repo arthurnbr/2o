@@ -9,10 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/arthurnbr/2o/internal/desktop"
 	"github.com/arthurnbr/2o/internal/files"
@@ -42,16 +40,24 @@ func run(args []string) error {
 		return daemon()
 	case "ssh":
 		return sshSession(args[1:])
+	case "free-port":
+		port, err := freePort()
+		if err != nil {
+			return err
+		}
+		fmt.Println(port)
+		return nil
 	case "status":
 		if len(args) != 1 {
 			return errors.New("usage: 2o status")
 		}
-		path := os.Getenv("TWO_O_SOCK")
-		if path == "" {
-			return errors.New("TWO_O_SOCK is unset; this shell was not started by '2o ssh HOST'")
+		c, err := request(wire.Message{Op: "ping"})
+		if err != nil {
+			return err
 		}
-		if err := checkSocket(path); err != nil {
-			return fmt.Errorf("forwarded socket %s: %w", path, err)
+		defer c.Close()
+		if err = response(c); err != nil {
+			return err
 		}
 		fmt.Println("2o: desktop tunnel active")
 		return nil
@@ -74,7 +80,7 @@ func run(args []string) error {
 		if len(b) > int(files.MaxBytes) {
 			return errors.New("clipboard too large")
 		}
-		c, err := connect()
+		c, err := request(wire.Message{Op: "copy", Size: int64(len(b))})
 		if err != nil {
 			if os.Getenv("SSH_CONNECTION") != "" {
 				return desktop.OSC52(b, os.Stdout)
@@ -82,22 +88,16 @@ func run(args []string) error {
 			return err
 		}
 		defer c.Close()
-		if err = wire.Write(c, wire.Message{Op: "copy", Size: int64(len(b))}); err != nil {
-			return err
-		}
 		if _, err = c.Write(b); err != nil {
 			return err
 		}
 		return response(c)
 	case "paste":
-		c, err := connect()
+		c, err := request(wire.Message{Op: "paste"})
 		if err != nil {
 			return err
 		}
 		defer c.Close()
-		if err = wire.Write(c, wire.Message{Op: "paste"}); err != nil {
-			return err
-		}
 		m, err := wire.Read(c)
 		if err != nil {
 			return err
@@ -128,6 +128,8 @@ func run(args []string) error {
 	}
 }
 
+// socketPath is versioned so a daemon from an incompatible release can keep
+// running without blocking this one.
 func socketPath() (string, error) {
 	base := os.Getenv("XDG_RUNTIME_DIR")
 	if base == "" {
@@ -146,8 +148,9 @@ func socketPath() (string, error) {
 	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
 		return "", errors.New("daemon socket directory belongs to another user")
 	}
-	return filepath.Join(base, "2o.sock"), nil
+	return filepath.Join(base, "2o-v2.sock"), nil
 }
+func keyPath(sock string) string { return strings.TrimSuffix(sock, ".sock") + ".key" }
 func daemon() error {
 	path, err := socketPath()
 	if err != nil {
@@ -175,19 +178,54 @@ func daemon() error {
 	if err = os.Chmod(path, 0600); err != nil {
 		return err
 	}
+	master, err := randomHex(32)
+	if err != nil {
+		return err
+	}
+	// SSH remote forwards target TCP on the desktop: the loopback listener
+	// only answers sessions authenticated with a registered secret.
+	tl, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer tl.Close()
+	key := keyPath(path)
+	_ = os.Remove(key)
+	if err = os.WriteFile(key, []byte(master+" "+tl.Addr().String()+"\n"), 0600); err != nil {
+		return err
+	}
+	defer os.Remove(key)
+	reg := newRegistry(master)
+	handle := func(c net.Conn) {
+		defer c.Close()
+		m, err := reg.authenticate(c)
+		if err != nil {
+			_ = wire.Write(c, wire.Message{Error: err.Error()})
+			return
+		}
+		if m.Op != "register" && m.Op != "unregister" {
+			serve(c, m)
+		}
+	}
+	go func() {
+		for {
+			c, e := tl.Accept()
+			if e != nil {
+				return
+			}
+			go handle(c)
+		}
+	}()
 	for {
 		c, e := l.Accept()
 		if e != nil {
 			return e
 		}
-		go func() { defer c.Close(); serve(c) }()
+		go handle(c)
 	}
 }
-func serve(c net.Conn) {
-	m, err := wire.Read(c)
-	if err != nil {
-		return
-	}
+func serve(c net.Conn, m wire.Message) {
+	var err error
 	fail := func(err error) { _ = wire.Write(c, wire.Message{Error: err.Error()}) }
 	switch m.Op {
 	case "ping":
@@ -284,73 +322,6 @@ func serve(c net.Conn) {
 		fail(errors.New("unknown operation"))
 	}
 }
-func checkSocket(path string) error {
-	c, err := net.DialTimeout("unix", path, 3*time.Second)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	if err := c.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return err
-	}
-	if err := wire.Write(c, wire.Message{Op: "ping"}); err != nil {
-		return err
-	}
-	reply, err := wire.Read(c)
-	if err != nil {
-		return err
-	}
-	// A daemon left running from before the status probe understands this
-	// framing but answers unknown operation. Its existing open operations
-	// remain usable until the desktop session ends.
-	if reply.Error == "" || reply.Error == "unknown operation" {
-		return nil
-	}
-	return errors.New(reply.Error)
-}
-func cacheDir() string {
-	if d := os.Getenv("XDG_CACHE_HOME"); d != "" {
-		return filepath.Join(d, "2o")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "2o")
-}
-func connect() (net.Conn, error) {
-	p := os.Getenv("TWO_O_SOCK")
-	if p != "" {
-		if c, e := net.Dial("unix", p); e == nil {
-			return c, nil
-		}
-	}
-	// In a reattached tmux session, the inherited socket may belong to a closed SSH session.
-	matches, _ := filepath.Glob(fmt.Sprintf("/tmp/2o-%d-*/sock", os.Getuid()))
-	type session struct {
-		path     string
-		modified int64
-	}
-	live := make([]session, 0, len(matches))
-	for _, candidate := range matches {
-		dir := filepath.Dir(candidate)
-		st, e := os.Lstat(dir)
-		if e != nil || !st.IsDir() || st.Mode().Perm() != 0700 {
-			continue
-		}
-		if s, ok := st.Sys().(*syscall.Stat_t); !ok || int(s.Uid) != os.Getuid() {
-			continue
-		}
-		live = append(live, session{candidate, st.ModTime().UnixNano()})
-	}
-	sort.Slice(live, func(i, j int) bool { return live[i].modified > live[j].modified })
-	for _, candidate := range live {
-		if c, e := net.Dial("unix", candidate.path); e == nil {
-			return c, nil
-		}
-	}
-	if os.Getenv("SSH_CONNECTION") != "" {
-		return nil, errors.New("no active 2o tunnel; exit this SSH shell and reconnect from your desktop with '2o ssh HOST' (the existing ssh connection cannot be retrofitted)")
-	}
-	return nil, errors.New("no active 2o SSH tunnel; connect from your desktop with '2o ssh HOST'")
-}
 func response(c net.Conn) error {
 	m, e := wire.Read(c)
 	if e != nil {
@@ -362,14 +333,11 @@ func response(c net.Conn) error {
 	return nil
 }
 func send(m wire.Message) error {
-	c, e := connect()
+	c, e := request(m)
 	if e != nil {
 		return e
 	}
 	defer c.Close()
-	if e = wire.Write(c, m); e != nil {
-		return e
-	}
 	return response(c)
 }
 func httpURL(raw string) bool {
@@ -386,7 +354,7 @@ func localURL(raw string) bool {
 }
 func open(target string) error {
 	if httpURL(target) {
-		if os.Getenv("SSH_CONNECTION") == "" && os.Getenv("TWO_O_SOCK") == "" {
+		if os.Getenv("SSH_CONNECTION") == "" && os.Getenv("TWO_O_SESSION") == "" {
 			return desktop.Open(target)
 		}
 		u, _ := url.Parse(target)
@@ -394,14 +362,11 @@ func open(target string) error {
 			return errors.New("remote localhost HTTPS is not supported")
 		}
 		if localURL(target) {
-			c, e := connect()
+			c, e := request(wire.Message{Op: "proxy", URL: target})
 			if e != nil {
 				return e
 			}
 			defer c.Close()
-			if e = wire.Write(c, wire.Message{Op: "proxy", URL: target}); e != nil {
-				return e
-			}
 			m, e := wire.Read(c)
 			if e != nil {
 				return e
@@ -416,7 +381,7 @@ func open(target string) error {
 	if strings.Contains(target, "://") {
 		return errors.New("unsupported URL scheme")
 	}
-	if os.Getenv("SSH_CONNECTION") == "" && os.Getenv("TWO_O_SOCK") == "" {
+	if os.Getenv("SSH_CONNECTION") == "" && os.Getenv("TWO_O_SESSION") == "" {
 		return desktop.Open(target)
 	}
 	name, mode, size, r, err := files.Prepare(target)
@@ -424,14 +389,11 @@ func open(target string) error {
 		return err
 	}
 	defer r.Close()
-	c, err := connect()
+	c, err := request(wire.Message{Op: "open-file", Name: name, Mode: uint32(mode), Size: size})
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	if err = wire.Write(c, wire.Message{Op: "open-file", Name: name, Mode: uint32(mode), Size: size}); err != nil {
-		return err
-	}
 	if _, err = io.CopyN(c, r, size); err != nil {
 		return err
 	}
@@ -524,14 +486,11 @@ func editFile(path string) error {
 		return err
 	}
 	defer f.Close()
-	c, err := connect()
+	c, err := request(wire.Message{Op: "edit", Name: filepath.Base(path), Size: size, Mode: uint32(mode), Hash: hex.EncodeToString(original[:])})
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	if err = wire.Write(c, wire.Message{Op: "edit", Name: filepath.Base(path), Size: size, Mode: uint32(mode), Hash: hex.EncodeToString(original[:])}); err != nil {
-		return err
-	}
 	if _, err = io.CopyN(c, f, size); err != nil {
 		return err
 	}

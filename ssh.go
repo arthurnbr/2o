@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -14,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/arthurnbr/2o/internal/wire"
 )
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
@@ -167,35 +168,65 @@ func sshSession(args []string) error {
 			return fmt.Errorf("bootstrap remote binary: %w", e)
 		}
 	}
-	var token [12]byte
-	if _, e = rand.Read(token[:]); e != nil {
+	master, daemonAddr, e := readKey(keyPath(local))
+	if e != nil {
+		return fmt.Errorf("desktop daemon key: %w", e)
+	}
+	id, e := randomHex(12)
+	if e != nil {
 		return e
 	}
-	remoteDir := fmt.Sprintf("/tmp/2o-%s-%s", lines[2], hex.EncodeToString(token[:]))
-	if _, e = sshRun(opts, host, "umask 077; mkdir -m 700 "+quote(remoteDir)+" && if test ! -e \"$HOME/.local/bin/xdg-open\" && test ! -L \"$HOME/.local/bin/xdg-open\"; then ln -s 2o \"$HOME/.local/bin/xdg-open\"; fi", nil); e != nil {
+	token, e := randomHex(32)
+	if e != nil {
 		return e
 	}
-	remoteSock := filepath.Join(remoteDir, "sock")
-	script := "TWO_O_SOCK=" + quote(remoteSock) + "; export TWO_O_SOCK; BROWSER=\"$HOME/.local/bin/2o\"; export BROWSER; PATH=\"$HOME/.local/bin:$PATH\"; export PATH; "
-	script += "if ! \"$HOME/.local/bin/2o\" status >/dev/null; then printf '%s\\n' '2o: SSH forwarded socket cannot reach the desktop; the remote shell was not opened' >&2; exit 1; fi; "
-	if len(command) == 0 {
-		script += "exec \"$HOME/.local/bin/2o\" shell"
-	} else {
-		script += strings.Join(command, " ")
+	if e = controlRequest(local, master, wire.Message{Op: "register", Name: id, Hash: token}); e != nil {
+		return fmt.Errorf("register session with desktop daemon: %w", e)
 	}
-	a := append(append([]string{}, opts...), "-o", "ExitOnForwardFailure=yes", "-R", remoteSock+":"+local)
-	if len(command) == 0 {
-		a = append(a, "-t")
-	} else {
-		a = append(a, "-T")
+	defer func() { _ = controlRequest(local, master, wire.Message{Op: "unregister", Name: id}) }()
+	remoteDir := fmt.Sprintf("/tmp/2o-%s-%s", lines[2], id)
+	var runErr error
+	// The remote port is chosen on the server; another process may grab it
+	// before sshd binds, which ExitOnForwardFailure reports as exit status 255.
+	for attempt := range 3 {
+		port, e := sshRun(opts, host, "\"$HOME/.local/bin/2o\" free-port", nil)
+		if e != nil {
+			return fmt.Errorf("pick remote port: %w", e)
+		}
+		remoteAddr := "127.0.0.1:" + port
+		// The token travels on stdin so it never appears in a process list.
+		setup := "umask 077; mkdir -m 700 " + quote(remoteDir) + " 2>/dev/null || test -d " + quote(remoteDir) + "; cat > " + quote(remoteDir+"/session") +
+			" && if test ! -e \"$HOME/.local/bin/xdg-open\" && test ! -L \"$HOME/.local/bin/xdg-open\"; then ln -s 2o \"$HOME/.local/bin/xdg-open\"; fi"
+		if _, e = sshRun(opts, host, setup, strings.NewReader(remoteAddr+" "+id+" "+token+"\n")); e != nil {
+			return fmt.Errorf("create remote session: %w", e)
+		}
+		script := "TWO_O_SESSION=" + quote(remoteDir+"/session") + "; export TWO_O_SESSION; BROWSER=\"$HOME/.local/bin/2o\"; export BROWSER; PATH=\"$HOME/.local/bin:$PATH\"; export PATH; "
+		script += "if ! \"$HOME/.local/bin/2o\" status >/dev/null; then printf '%s\\n' '2o: tunnel to the desktop is not working; the remote shell was not opened' >&2; exit 1; fi; "
+		if len(command) == 0 {
+			script += "exec \"$HOME/.local/bin/2o\" shell"
+		} else {
+			script += strings.Join(command, " ")
+		}
+		a := append(append([]string{}, opts...), "-o", "ExitOnForwardFailure=yes", "-R", remoteAddr+":"+daemonAddr)
+		if len(command) == 0 {
+			a = append(a, "-t")
+		} else {
+			a = append(a, "-T")
+		}
+		a = append(a, host, script)
+		cmd := exec.Command("ssh", a...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		start := time.Now()
+		runErr = cmd.Run()
+		var exit *exec.ExitError
+		// Only a fast 255 (forward refused before the shell starts) is retried.
+		if attempt < 2 && errors.As(runErr, &exit) && exit.ExitCode() == 255 && time.Since(start) < 5*time.Second {
+			continue
+		}
+		break
 	}
-	a = append(a, host, script)
-	cmd := exec.Command("ssh", a...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
-	// The private directory belongs to the remote account; remove only our own generated path.
-	_, _ = sshRun(opts, host, "rm -f "+quote(remoteSock)+"; rmdir "+quote(remoteDir), nil)
+	_, _ = sshRun(opts, host, "rm -rf -- "+quote(remoteDir), nil)
 	return runErr
 }

@@ -29,11 +29,13 @@ chmod +x ~/Documents/2o/2o
 
 The binary belongs on the **SSH-origin desktop**; `2o ssh` installs the server copy automatically. If the remote Linux server has a different CPU architecture, cross-building its copy at connection time additionally requires Go and this source checkout on the SSH-origin desktop.
 
-In the shell opened by `2o ssh`, run `2o status` to check the exact forwarded socket, then `2o open report.pdf`. To open on an earlier SSH hop instead, launch `2o ssh` from that earlier computer: each wrapper connection delivers to its immediate client desktop.
+In the shell opened by `2o ssh`, run `2o status` to check the tunnel, then `2o open report.pdf`. To open on an earlier SSH hop instead, launch `2o ssh` from that earlier computer: each wrapper connection delivers to its immediate client desktop.
 
-`2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, creates a private per-session Unix socket on the server, and adds an SSH remote Unix-socket forward. **Before presenting a remote shell it sends a ping through that exact socket**; a rejected or broken forward now fails immediately, with its path and OS error. Inside the shell `TWO_O_SOCK` and `BROWSER` are exported. No TCP listener, no SFTP login; SSH must permit remote Unix-socket forwarding (OpenSSH `AllowStreamLocalForwarding`, or the corresponding Tailscale SSH policy). The daemon uses `$XDG_RUNTIME_DIR/2o.sock` or a private temp directory if unset. You can run `./2o daemon` from your desktop session explicitly.
+`2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, registers a fresh per-session secret with the daemon, and adds an SSH **remote TCP forward** from a free loopback port on the server (`127.0.0.1` only) to the daemon's loopback listener. The secret is written over SSH stdin into a private `/tmp/2o-UID-ID/session` file (mode 0600, directory 0700) and exported as `TWO_O_SESSION`, together with `BROWSER`. **Before presenting a remote shell it checks the tunnel end to end**; a broken forward fails immediately.
 
-With a normal SSH connection rather than `2o ssh`, create the forward manually and export `TWO_O_SOCK` on the remote side. `2o` can discover live private `/tmp/2o-UID-*/sock` session sockets when a tmux session has a stale `TWO_O_SOCK`. A per-session path avoids collisions across simultaneous connections. Where multiple sessions exist, explicitly setting `TWO_O_SOCK` selects the intended desktop.
+Why TCP rather than a forwarded Unix socket: Tailscale SSH creates reverse Unix sockets as root with mode 0600, so the logged-in user gets `permission denied`. A loopback port is reachable by any local user of the server, so every connection runs a mutual HMAC challenge with the session secret: the daemon must prove the secret *before* the client sends anything (an impostor on a stale port receives nothing), and the client must prove it before the daemon acts. Closing the session unregisters its secret. No SFTP login. The daemon listens on `$XDG_RUNTIME_DIR/2o-v2.sock` (control) and a random `127.0.0.1` port; you can run `./2o daemon` from your desktop session explicitly.
+
+In a reattached tmux session whose `TWO_O_SESSION` is stale, `2o` tries the newest other live private session file of the same user.
 
 ## Remote commands
 
@@ -57,9 +59,9 @@ For editing, set a *blocking graphical editor* on your **desktop** before the da
 ## Limits and trust
 
 - Max transferred file/archive and clipboard: 256 MiB. OSC 52 fallback for `2o copy` without a tunnel is capped at 100 KiB; the terminal must support OSC 52.
-- Files arrive under `~/.cache/2o` (or `$XDG_CACHE_HOME/2o`). The cache currently needs manual cleanup. A remote account with access to the SSH session socket can request permitted desktop actions. Do not use an untrusted remote account.
-- Executable files, `.desktop` files, scripts and symlinks are refused for opening. A received path is **never** treated as a local path. The local daemon listens on a user-only Unix socket, not the network.
+- Files arrive under `~/.cache/2o` (or `$XDG_CACHE_HOME/2o`). The cache currently needs manual cleanup. Processes running as your user on the server can read the session file and request permitted desktop actions. Do not use an untrusted remote account.
+- Executable files, `.desktop` files, scripts and symlinks are refused for opening. A received path is **never** treated as a local path. On the desktop, the daemon's TCP listener is bound to `127.0.0.1` and serves only authenticated sessions.
 - `2o edit` requires a graphical blocking editor on the desktop; headless desktop integrations fail rather than silently opening on the server.
-- SSH servers with Unix-socket forwarding disabled cannot use this transport. Remote HTTPS localhost and WebSockets are not currently bridged.
+- SSH servers with remote TCP forwarding disabled (`AllowTcpForwarding no`) cannot use this transport. Remote HTTPS localhost and WebSockets are not currently bridged.
 
 See [PLAN.md](PLAN.md) for architecture, security review and milestone acceptance.

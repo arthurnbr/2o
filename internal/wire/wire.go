@@ -18,6 +18,7 @@ type Message struct {
 	Size  int64  `json:"size,omitempty"`
 	Mode  uint32 `json:"mode,omitempty"`
 	Hash  string `json:"hash,omitempty"`
+	Token string `json:"token,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
