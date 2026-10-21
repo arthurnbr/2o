@@ -56,10 +56,21 @@ printf 'hello' | 2o copy             # remote stdin -> local clipboard
 
 For editing, set a *blocking graphical editor* on your **desktop** before the daemon starts, e.g. `export TWO_O_EDITOR='code --wait'` or `TWO_O_EDITOR='gvim -f'`. `VISUAL` and `EDITOR` are also accepted; otherwise a detected graphical editor is used. The editor must exit after the edit. The remote file is atomically replaced after an optimistic hash check. On conflict, the command reports the full path of the retained **local recovery copy**; the remote file is not overwritten. As with other optimistic checks, a writer racing between the final hash check and rename is not excluded. `2o open` creates only a copy; it does not sync edits back.
 
-## Limits and trust
+## Limits, settings and trust
 
-- Max transferred file/archive and clipboard: 256 MiB. OSC 52 fallback for `2o copy` without a tunnel is capped at 100 KiB; the terminal must support OSC 52.
-- Files arrive under `~/.cache/2o` (or `$XDG_CACHE_HOME/2o`). The cache currently needs manual cleanup. Processes running as your user on the server can read the session file and request permitted desktop actions. Do not use an untrusted remote account.
+Size policy is decided by **the desktop** (the machine where things open); the server only announces sizes, and nothing is streamed before the desktop agrees. Set these in the environment of the desktop daemon (e.g. your shell profile, then restart it with `pkill -f '2o daemon'`):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TWO_O_CONFIRM_BYTES` | `1G` | Above this, a notification with **Accept / Refuse** buttons asks before receiving. Ignoring it for 2 minutes, or having no notification daemon, counts as refuse. `0` = never ask. |
+| `TWO_O_MAX_BYTES` | `0` (none) | Hard cap: larger transfers are refused without asking. |
+| `TWO_O_CLIPBOARD_BYTES` | `16M` | Clipboard copy/paste through the tunnel (held in memory). |
+| `TWO_O_CACHE_DAYS` | `7` | Received copies in `~/.cache/2o` older than this are deleted (at daemon start, then every 6 h). `0` = keep everything. Edit recovery copies are never deleted. |
+
+Sizes accept `k`, `M`, `G`, `T` suffixes. Regardless of settings, a transfer that would leave less than 1 GiB free on the desktop disk is refused. The daemon logs to `~/.cache/2o/daemon.log`.
+
+- OSC 52 fallback for `2o copy` without a tunnel is capped at 100 KiB; the terminal must support OSC 52.
+- Processes running as your user on the server can read the session file and request permitted desktop actions. Do not use an untrusted remote account.
 - Executable files, `.desktop` files, scripts and symlinks are refused for opening. A received path is **never** treated as a local path. On the desktop, the daemon's TCP listener is bound to `127.0.0.1` and serves only authenticated sessions.
 - `2o edit` requires a graphical blocking editor on the desktop; headless desktop integrations fail rather than silently opening on the server.
 - SSH servers with remote TCP forwarding disabled (`AllowTcpForwarding no`) cannot use this transport. Remote HTTPS localhost and WebSockets are not currently bridged.

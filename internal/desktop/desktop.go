@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const maxOSC52Bytes = 100 * 1024
@@ -116,6 +118,52 @@ func Notify(title, body string) error {
 	default:
 		return fmt.Errorf("%w: notifications on %s", ErrUnavailable, runtime.GOOS)
 	}
+}
+
+// confirmTimeout bounds how long a transfer waits for the user.
+const confirmTimeout = 2 * time.Minute
+
+// Confirm asks the desktop user a yes/no question. Dismissing or ignoring the
+// prompt counts as no. An error means no prompt could be shown at all.
+func Confirm(title, body string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), confirmTimeout)
+	defer cancel()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		if err := available("notify-send"); err != nil {
+			return false, err
+		}
+		cmd = exec.CommandContext(ctx, "notify-send", "--urgency=critical", "--app-name=2o",
+			"--action=accept=Accept", "--action=refuse=Refuse", "--", title, body)
+	case "darwin":
+		if err := available("osascript"); err != nil {
+			return false, err
+		}
+		cmd = exec.CommandContext(ctx, "osascript",
+			"-e", "on run argv",
+			"-e", "display dialog (item 2 of argv) with title (item 1 of argv) buttons {\"Refuse\", \"Accept\"} default button \"Refuse\" giving up after 110",
+			"-e", "return button returned of result",
+			"-e", "end run", title, body)
+	default:
+		return false, fmt.Errorf("%w: confirmation on %s", ErrUnavailable, runtime.GOOS)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return false, nil // nobody answered
+	}
+	answer := strings.ToLower(strings.TrimSpace(string(out)))
+	if err != nil && answer == "" {
+		// osascript exits non-zero when the dialog is cancelled; notify-send
+		// only fails when it cannot reach a notification daemon.
+		if runtime.GOOS == "darwin" {
+			return false, nil
+		}
+		return false, commandError(cmd.Path, err, stderr.String())
+	}
+	return answer == "accept", nil
 }
 
 // Edit blocks until a graphical editor closes the file. The daemon has no terminal.

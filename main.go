@@ -73,12 +73,12 @@ func run(args []string) error {
 		}
 		return open(args[1])
 	case "copy":
-		b, err := io.ReadAll(io.LimitReader(os.Stdin, files.MaxBytes+1))
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, defaultClipBytes*64+1))
 		if err != nil {
 			return err
 		}
-		if len(b) > int(files.MaxBytes) {
-			return errors.New("clipboard too large")
+		if int64(len(b)) > defaultClipBytes*64 {
+			return errors.New("clipboard input too large")
 		}
 		c, err := request(wire.Message{Op: "copy", Size: int64(len(b))})
 		if err != nil {
@@ -196,6 +196,7 @@ func daemon() error {
 	}
 	defer os.Remove(key)
 	reg := newRegistry(master)
+	go cacheJanitor()
 	handle := func(c net.Conn) {
 		defer c.Close()
 		m, err := reg.authenticate(c)
@@ -250,6 +251,14 @@ func serve(c net.Conn, m wire.Message) {
 			fail(err)
 			return
 		}
+		if err = admitTransfer(m.Name, m.Size, base); err != nil {
+			fail(err)
+			return
+		}
+		// The remote waits for this go-ahead before streaming any payload.
+		if err = wire.Write(c, wire.Message{Op: "accept"}); err != nil {
+			return
+		}
 		path, e := files.Receive(m.Name, os.FileMode(m.Mode), m.Size, c, base)
 		if e != nil {
 			fail(e)
@@ -261,7 +270,7 @@ func serve(c net.Conn, m wire.Message) {
 		}
 		_ = wire.Write(c, wire.Message{})
 	case "copy":
-		if m.Size < 0 || m.Size > files.MaxBytes {
+		if m.Size < 0 || m.Size > clipLimit() {
 			fail(errors.New("clipboard too large"))
 			return
 		}
@@ -285,7 +294,7 @@ func serve(c net.Conn, m wire.Message) {
 			fail(e)
 			return
 		}
-		if len(b) > int(files.MaxBytes) {
+		if int64(len(b)) > clipLimit() {
 			fail(errors.New("clipboard too large"))
 			return
 		}
@@ -394,10 +403,28 @@ func open(target string) error {
 		return err
 	}
 	defer c.Close()
+	if err = awaitAccept(c); err != nil {
+		return err
+	}
 	if _, err = io.CopyN(c, r, size); err != nil {
 		return err
 	}
 	return response(c)
+}
+
+// awaitAccept reads the desktop's go-ahead (or refusal) before the payload.
+func awaitAccept(c net.Conn) error {
+	m, err := wire.Read(c)
+	if err != nil {
+		return err
+	}
+	if m.Error != "" {
+		return errors.New(m.Error)
+	}
+	if m.Op != "accept" {
+		return errors.New("desktop daemon is out of date; restart it (pkill -f '2o daemon')")
+	}
+	return nil
 }
 func serveEdit(c net.Conn, m wire.Message) {
 	fail := func(e error) { _ = wire.Write(c, wire.Message{Error: e.Error()}) }
@@ -407,6 +434,13 @@ func serveEdit(c net.Conn, m wire.Message) {
 	}
 	if e := os.MkdirAll(cacheDir(), 0700); e != nil {
 		fail(e)
+		return
+	}
+	if e := admitTransfer(m.Name, m.Size, cacheDir()); e != nil {
+		fail(e)
+		return
+	}
+	if e := wire.Write(c, wire.Message{Op: "accept"}); e != nil {
 		return
 	}
 	dir, e := os.MkdirTemp(cacheDir(), "edit-")
@@ -491,6 +525,9 @@ func editFile(path string) error {
 		return err
 	}
 	defer c.Close()
+	if err = awaitAccept(c); err != nil {
+		return err
+	}
 	if _, err = io.CopyN(c, f, size); err != nil {
 		return err
 	}

@@ -32,3 +32,5 @@
 6. Localhost proxy preserves HTTP request and response over SSH, then notification delivery. (Notification is capability 6 in the original list; localhost is capability 5.)
 
 Verification includes a real SSH remote Unix-socket forward from omarchy to `78.123.62.14:22`: `2o status`, URL/PDF/directory open, clipboard copy/paste, edit writeback, localhost HTTP proxy, and notification all completed. PDF and directory copies matched remote SHA-256 hashes; HTTP response came from the server's loopback listener. Local desktop actions were recorded with test commands, not a real graphical application, so this does not prove a real GUI launch on the user's SSH-origin machine.
+
+Transfer policy (desktop-side, before any payload): `TWO_O_MAX_BYTES` hard cap, free-disk check keeping 1 GiB, notification Accept/Refuse above `TWO_O_CONFIRM_BYTES` (default 1 GiB; no answer or no notifier = refuse), `TWO_O_CLIPBOARD_BYTES` (16 MiB, in memory), cache cleanup after `TWO_O_CACHE_DAYS` (7). Verified on `78.123.62.14`: refused 3 MiB transfer left nothing in cache, accepted one matched the server hash, cap refusal without prompt.

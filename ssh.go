@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arthurnbr/2o/internal/wire"
@@ -66,10 +67,20 @@ func ensureDaemon() (string, error) {
 	if e != nil {
 		return "", e
 	}
+	// Detach: own session (survives the terminal closing) and its own log,
+	// so a piped `2o ssh ... | cmd` does not wait for the daemon to exit.
+	if e = os.MkdirAll(cacheDir(), 0700); e != nil {
+		return "", e
+	}
+	logf, e := os.OpenFile(filepath.Join(cacheDir(), "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if e != nil {
+		return "", e
+	}
+	defer logf.Close()
 	cmd := exec.Command(self, "daemon")
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if e = cmd.Start(); e != nil {
 		return "", e
 	}

@@ -1,0 +1,39 @@
+# Maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
+pkgname=2o-git
+pkgver=r6.574228c
+pkgrel=1
+pkgdesc='Open files and URLs on your local desktop from a remote SSH shell'
+arch=('x86_64' 'aarch64')
+url='https://github.com/arthurnbr/2o'
+license=('MIT')
+depends=('openssh' 'xdg-utils')
+makedepends=('git' 'go')
+provides=('2o')
+conflicts=('2o')
+source=("$pkgname::git+$url.git")
+sha256sums=('SKIP')
+# Static, stripped binary: `2o ssh` uploads this same executable to remote servers.
+options=('!debug')
+
+pkgver() {
+  cd "$pkgname"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "$pkgname"
+  export CGO_ENABLED=0
+  export GOFLAGS='-trimpath -mod=readonly -modcacherw'
+  go build -ldflags '-s -w' -o 2o .
+}
+
+check() {
+  cd "$pkgname"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 2o "$pkgdir/usr/bin/2o"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

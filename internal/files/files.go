@@ -14,7 +14,9 @@ import (
 	"unicode/utf8"
 )
 
-const MaxBytes int64 = 256 << 20
+// MaxBytes is a protocol sanity ceiling (1 TiB), not a policy: the desktop
+// daemon decides what it accepts (size cap, free space, confirmation).
+const MaxBytes int64 = 1 << 40
 
 type entry struct {
 	name string
