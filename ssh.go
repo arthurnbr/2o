@@ -118,9 +118,6 @@ func sshSession(args []string) error {
 	if e != nil {
 		return e
 	}
-	if os.Getenv("SSH_CONNECTION") != "" {
-		return errors.New("2o ssh must run on the desktop that initiated SSH, not inside an SSH shell; exit this session and reconnect with '2o ssh HOST' (an existing ssh session cannot gain the forward)")
-	}
 	local, e := ensureDaemon()
 	if e != nil {
 		return e

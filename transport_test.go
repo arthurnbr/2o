@@ -25,16 +25,6 @@ func TestSSHOptionsAndCommand(t *testing.T) {
 	}
 }
 
-func TestSSHStartedInsideSSHRejectsWrongConnectionDirection(t *testing.T) {
-	t.Setenv("SSH_CONNECTION", "100.71.225.71 50000 100.93.47.7 22")
-	err := sshSession([]string{"omarchy"})
-	if err == nil || !strings.Contains(err.Error(), "run on the desktop") && !strings.Contains(err.Error(), "must run on the desktop") {
-		t.Fatalf("nested SSH should explain which end must start 2o: %v", err)
-	}
-	if !strings.Contains(err.Error(), "existing ssh session") {
-		t.Fatalf("existing SSH connection cannot be retrofitted: %v", err)
-	}
-}
 func TestSessionHandshakeChecksExactForwardedSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "desktop.sock")
 	listener, err := net.Listen("unix", path)

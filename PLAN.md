@@ -20,7 +20,7 @@
 - Do not promise portal confirmation or graphical environment inheritance. A daemon started from a desktop session can use `xdg-open`; a headless daemon must fail visibly. Do not assume MIME alone prevents execution: block dangerous extensions and executable files.
 - A local editor is not `xdg-open`: `edit` needs a real blocking editor, an explicit conflict check and failure propagation.
 - A local reverse-forward *cannot* on its own reach remote localhost after the initiating command exits. Keep a live request stream for HTTP proxying; avoid silently opening the wrong service.
-- Go 1.26.6 was found on the execution host `omarchy`, not verified on the user's SSH-origin desktop. SSH to `78.123.62.14` timed out or had no route **from omarchy**; the user reports it works from their own machine. Verify connection-specific behavior from the desktop that initiates SSH; loopback OpenSSH tests only prove the transport independently of that network route.
+- Go 1.26.6 is installed on `omarchy`; the originating machine may use a copied static binary instead. The server `78.123.62.14` is reachable from omarchy as `2serv-1` on **port 22**. The distinct `2serv-2` alias uses port 222, which returned `No route to host`; treating that failure as server-wide unavailability was incorrect.
 
 ## Milestones, acceptance
 
@@ -31,4 +31,4 @@
 5. Edit with wait, changed content round-trip, conflict rejection.
 6. Localhost proxy preserves HTTP request and response over SSH, then notification delivery. (Notification is capability 6 in the original list; localhost is capability 5.)
 
-After every milestone, proceed to the next. Validate `78.123.62.14` from the user's SSH-origin desktop when accessible; do not extrapolate reachability from omarchy.
+Verification includes a real SSH remote Unix-socket forward from omarchy to `78.123.62.14:22`: `2o status`, URL/PDF/directory open, clipboard copy/paste, edit writeback, localhost HTTP proxy, and notification all completed. PDF and directory copies matched remote SHA-256 hashes; HTTP response came from the server's loopback listener. Local desktop actions were recorded with test commands, not a real graphical application, so this does not prove a real GUI launch on the user's SSH-origin machine.

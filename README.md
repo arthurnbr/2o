@@ -4,15 +4,15 @@ Open a file or URL on **your own desktop** from a remote SSH shell, with the fil
 
 ## Build and connect
 
-Run these commands **on the computer where you want the browser and files to open**, before connecting to the server. Do not run `2o ssh omarchy` from an SSH shell that is already on `omarchy`: that would start a second SSH connection from the server to itself, not add forwarding to your current connection.
+Run `2o ssh` on the computer where you want applications to open. That can itself be a host reached through SSH, if its desktop session is available; in that case files open **there**, not on the computer at the beginning of the SSH chain. An already-running SSH connection cannot be retrofitted with this forward.
 
 ```sh
 git clone https://github.com/arthurnbr/2o.git
 cd 2o
 go build -o 2o .
-./2o ssh omarchy                   # if omarchy is the host you normally ssh into
-# or ./2o ssh 2serv-2              # an SSH alias defined on this desktop
-# or ./2o ssh -p 222 arthur@78.123.62.14
+./2o ssh omarchy                    # open on this desktop while working on omarchy
+# or ./2o ssh 2serv-1               # SSH alias for 78.123.62.14:22
+# or ./2o ssh arthur@78.123.62.14
 ```
 
 If Go is absent on the SSH-origin desktop, compile **on a Linux machine with Go** for that desktop's architecture (`uname -m` gives `x86_64` → `amd64`, `aarch64` → `arm64`) and copy the binary back. Example with a Linux amd64 desktop and this checkout on `omarchy`:
@@ -29,7 +29,7 @@ chmod +x ~/Documents/2o/2o
 
 The binary belongs on the **SSH-origin desktop**; `2o ssh` installs the server copy automatically. If the remote Linux server has a different CPU architecture, cross-building its copy at connection time additionally requires Go and this source checkout on the SSH-origin desktop.
 
-In the shell opened by `2o ssh`, run `2o status` to check the exact forwarded socket, then `2o open report.pdf`. If you are already in a normal `ssh omarchy` shell, exit that shell first and reconnect from your desktop using `2o ssh omarchy`. An existing SSH connection cannot be retrofitted by running the wrapper on its server side.
+In the shell opened by `2o ssh`, run `2o status` to check the exact forwarded socket, then `2o open report.pdf`. To open on an earlier SSH hop instead, launch `2o ssh` from that earlier computer: each wrapper connection delivers to its immediate client desktop.
 
 `2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, creates a private per-session Unix socket on the server, and adds an SSH remote Unix-socket forward. **Before presenting a remote shell it sends a ping through that exact socket**; a rejected or broken forward now fails immediately, with its path and OS error. Inside the shell `TWO_O_SOCK` and `BROWSER` are exported. No TCP listener, no SFTP login; SSH must permit remote Unix-socket forwarding (OpenSSH `AllowStreamLocalForwarding`, or the corresponding Tailscale SSH policy). The daemon uses `$XDG_RUNTIME_DIR/2o.sock` or a private temp directory if unset. You can run `./2o daemon` from your desktop session explicitly.
 
