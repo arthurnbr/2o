@@ -118,6 +118,9 @@ func sshSession(args []string) error {
 	if e != nil {
 		return e
 	}
+	if os.Getenv("SSH_CONNECTION") != "" {
+		return errors.New("2o ssh must run on the desktop that initiated SSH, not inside an SSH shell; exit this session and reconnect with '2o ssh HOST' (an existing ssh session cannot gain the forward)")
+	}
 	local, e := ensureDaemon()
 	if e != nil {
 		return e
@@ -177,6 +180,7 @@ func sshSession(args []string) error {
 	}
 	remoteSock := filepath.Join(remoteDir, "sock")
 	script := "TWO_O_SOCK=" + quote(remoteSock) + "; export TWO_O_SOCK; BROWSER=\"$HOME/.local/bin/2o\"; export BROWSER; PATH=\"$HOME/.local/bin:$PATH\"; export PATH; "
+	script += "if ! \"$HOME/.local/bin/2o\" status >/dev/null; then printf '%s\\n' '2o: SSH forwarded socket cannot reach the desktop; the remote shell was not opened' >&2; exit 1; fi; "
 	if len(command) == 0 {
 		script += "exec \"$HOME/.local/bin/2o\" shell"
 	} else {

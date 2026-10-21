@@ -4,15 +4,20 @@ Open a file or URL on **your own desktop** from a remote SSH shell, with the fil
 
 ## Build and connect
 
+Run these commands **on the computer where you want the browser and files to open**, before connecting to the server. Do not run `2o ssh omarchy` from an SSH shell that is already on `omarchy`: that would start a second SSH connection from the server to itself, not add forwarding to your current connection.
+
 ```sh
 git clone https://github.com/arthurnbr/2o.git
 cd 2o
 go build -o 2o .
-./2o ssh 2serv-2                   # same flags as ssh before HOST, e.g. -p 222
-# or ./2o ssh -J bastion user@remote
+./2o ssh omarchy                   # if omarchy is the host you normally ssh into
+# or ./2o ssh 2serv-2              # an SSH alias defined on this desktop
+# or ./2o ssh -p 222 arthur@78.123.62.14
 ```
 
-`2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, creates a private per-session Unix socket on the server, adds an SSH remote Unix-socket forward and exports `TWO_O_SOCK` and `BROWSER` to the remote login shell. It uses no TCP listener, no SFTP login, and requires SSH's `AllowStreamLocalForwarding` to be enabled. The daemon uses `$XDG_RUNTIME_DIR/2o.sock` or a private temp directory if unset. You can run `./2o daemon` from your desktop session explicitly.
+In the shell opened by `2o ssh`, run `2o status` to check the exact forwarded socket, then `2o open report.pdf`. If you are already in a normal `ssh omarchy` shell, exit that shell first and reconnect from your desktop using `2o ssh omarchy`. An existing SSH connection cannot be retrofitted by running the wrapper on its server side.
+
+`2o ssh` launches a daemon in the desktop session if needed, verifies/installs the server binary, creates a private per-session Unix socket on the server, and adds an SSH remote Unix-socket forward. **Before presenting a remote shell it sends a ping through that exact socket**; a rejected or broken forward now fails immediately, with its path and OS error. Inside the shell `TWO_O_SOCK` and `BROWSER` are exported. No TCP listener, no SFTP login; SSH must permit remote Unix-socket forwarding (OpenSSH `AllowStreamLocalForwarding`, or the corresponding Tailscale SSH policy). The daemon uses `$XDG_RUNTIME_DIR/2o.sock` or a private temp directory if unset. You can run `./2o daemon` from your desktop session explicitly.
 
 With a normal SSH connection rather than `2o ssh`, create the forward manually and export `TWO_O_SOCK` on the remote side. `2o` can discover live private `/tmp/2o-UID-*/sock` session sockets when a tmux session has a stale `TWO_O_SOCK`. A per-session path avoids collisions across simultaneous connections. Where multiple sessions exist, explicitly setting `TWO_O_SOCK` selects the intended desktop.
 

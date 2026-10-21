@@ -20,7 +20,7 @@
 - Do not promise portal confirmation or graphical environment inheritance. A daemon started from a desktop session can use `xdg-open`; a headless daemon must fail visibly. Do not assume MIME alone prevents execution: block dangerous extensions and executable files.
 - A local editor is not `xdg-open`: `edit` needs a real blocking editor, an explicit conflict check and failure propagation.
 - A local reverse-forward *cannot* on its own reach remote localhost after the initiating command exits. Keep a live request stream for HTTP proxying; avoid silently opening the wrong service.
-- `go` is already installed locally (1.26.6); no sudo required. The requested server SSH is unreachable on public port 22/222 and its Tailscale peer is offline; test all capabilities through an isolated loopback OpenSSH server and retry deployment at the end.
+- Go 1.26.6 was found on the execution host `omarchy`, not verified on the user's SSH-origin desktop. SSH to `78.123.62.14` timed out or had no route **from omarchy**; the user reports it works from their own machine. Verify connection-specific behavior from the desktop that initiates SSH; loopback OpenSSH tests only prove the transport independently of that network route.
 
 ## Milestones, acceptance
 
@@ -31,4 +31,4 @@
 5. Edit with wait, changed content round-trip, conflict rejection.
 6. Localhost proxy preserves HTTP request and response over SSH, then notification delivery. (Notification is capability 6 in the original list; localhost is capability 5.)
 
-After every milestone, proceed to the next. Test remotely on `78.123.62.14` when SSH is reachable; do not claim remote verification if it is not.
+After every milestone, proceed to the next. Validate `78.123.62.14` from the user's SSH-origin desktop when accessible; do not extrapolate reachability from omarchy.

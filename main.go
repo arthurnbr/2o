@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/arthurnbr/2o/internal/desktop"
 	"github.com/arthurnbr/2o/internal/files"
@@ -41,6 +42,19 @@ func run(args []string) error {
 		return daemon()
 	case "ssh":
 		return sshSession(args[1:])
+	case "status":
+		if len(args) != 1 {
+			return errors.New("usage: 2o status")
+		}
+		path := os.Getenv("TWO_O_SOCK")
+		if path == "" {
+			return errors.New("TWO_O_SOCK is unset; this shell was not started by '2o ssh HOST'")
+		}
+		if err := checkSocket(path); err != nil {
+			return fmt.Errorf("forwarded socket %s: %w", path, err)
+		}
+		fmt.Println("2o: desktop tunnel active")
+		return nil
 	case "shell":
 		shell := os.Getenv("SHELL")
 		if shell == "" {
@@ -176,6 +190,8 @@ func serve(c net.Conn) {
 	}
 	fail := func(err error) { _ = wire.Write(c, wire.Message{Error: err.Error()}) }
 	switch m.Op {
+	case "ping":
+		_ = wire.Write(c, wire.Message{})
 	case "open-url":
 		if !httpURL(m.URL) {
 			fail(errors.New("only HTTP(S) URLs allowed"))
@@ -268,6 +284,20 @@ func serve(c net.Conn) {
 		fail(errors.New("unknown operation"))
 	}
 }
+func checkSocket(path string) error {
+	c, err := net.DialTimeout("unix", path, 3*time.Second)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if err := c.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	if err := wire.Write(c, wire.Message{Op: "ping"}); err != nil {
+		return err
+	}
+	return response(c)
+}
 func cacheDir() string {
 	if d := os.Getenv("XDG_CACHE_HOME"); d != "" {
 		return filepath.Join(d, "2o")
@@ -306,7 +336,10 @@ func connect() (net.Conn, error) {
 			return c, nil
 		}
 	}
-	return nil, errors.New("no active 2o SSH tunnel (use 2o ssh HOST)")
+	if os.Getenv("SSH_CONNECTION") != "" {
+		return nil, errors.New("no active 2o tunnel; exit this SSH shell and reconnect from your desktop with '2o ssh HOST' (the existing ssh connection cannot be retrofitted)")
+	}
+	return nil, errors.New("no active 2o SSH tunnel; connect from your desktop with '2o ssh HOST'")
 }
 func response(c net.Conn) error {
 	m, e := wire.Read(c)
