@@ -42,59 +42,6 @@ func Open(target string) error {
 	return err
 }
 
-// Copy places data on the local system clipboard. There is no implicit terminal fallback.
-func Copy(data []byte) error {
-	name, args, err := clipboardCommand(true)
-	if err != nil {
-		return err
-	}
-	_, err = run(name, data, false, args...)
-	return err
-}
-
-// Paste reads the local system clipboard.
-func Paste() ([]byte, error) {
-	name, args, err := clipboardCommand(false)
-	if err != nil {
-		return nil, err
-	}
-	return run(name, nil, true, args...)
-}
-
-func clipboardCommand(copying bool) (string, []string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		name := "pbpaste"
-		if copying {
-			name = "pbcopy"
-		}
-		return name, nil, available(name)
-	case "linux":
-		if os.Getenv("WAYLAND_DISPLAY") != "" {
-			name := "wl-paste"
-			args := []string{"--no-newline"}
-			if copying {
-				name, args = "wl-copy", nil
-			}
-			if available(name) == nil {
-				return name, args, nil
-			}
-		}
-		if os.Getenv("DISPLAY") != "" {
-			if err := available("xclip"); err == nil {
-				args := []string{"-selection", "clipboard", "-out"}
-				if copying {
-					args[2] = "-in"
-				}
-				return "xclip", args, nil
-			}
-		}
-		return "", nil, fmt.Errorf("%w: no clipboard command for the active display", ErrUnavailable)
-	default:
-		return "", nil, fmt.Errorf("%w: clipboard on %s", ErrUnavailable, runtime.GOOS)
-	}
-}
-
 // Notify displays a desktop notification; unsupported or headless sessions fail visibly.
 func Notify(title, body string) error {
 	switch runtime.GOOS {
@@ -230,19 +177,36 @@ func available(name string) error {
 }
 
 func run(name string, input []byte, capture bool, args ...string) ([]byte, error) {
+	return runEnv(name, nil, input, capture, args...)
+}
+
+// runEnv runs a desktop tool. Tools such as wl-copy, xclip or a browser
+// launched by xdg-open leave background children holding inherited fds, so
+// non-captured output goes to /dev/null and stderr to a file: no pipe means
+// Wait returns when the tool itself exits.
+func runEnv(name string, env []string, input []byte, capture bool, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
 	}
-	var stdout, stderr bytes.Buffer
+	errFile, err := os.CreateTemp("", "2o-stderr-")
+	if err != nil {
+		return nil, err
+	}
+	_ = os.Remove(errFile.Name())
+	defer errFile.Close()
+	cmd.Stderr = errFile
+	var stdout bytes.Buffer
 	if capture {
 		cmd.Stdout = &stdout
-	} else {
-		cmd.Stdout = io.Discard
 	}
-	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, commandError(name, err, stderr.String())
+		_, _ = errFile.Seek(0, io.SeekStart)
+		msg, _ := io.ReadAll(io.LimitReader(errFile, 4096))
+		return nil, commandError(name, err, string(msg))
 	}
 	return stdout.Bytes(), nil
 }

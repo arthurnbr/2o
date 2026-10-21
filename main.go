@@ -93,6 +93,10 @@ func run(args []string) error {
 		}
 		return response(c)
 	case "paste":
+		toClipboard := len(args) == 2 && (args[1] == "-c" || args[1] == "--clipboard")
+		if len(args) > 2 || (len(args) == 2 && !toClipboard) {
+			return errors.New("usage: 2o paste [-c|--clipboard]")
+		}
 		c, err := request(wire.Message{Op: "paste"})
 		if err != nil {
 			return err
@@ -108,8 +112,20 @@ func run(args []string) error {
 		if m.Size < 0 || m.Size > files.MaxBytes {
 			return errors.New("clipboard too large")
 		}
-		_, err = io.CopyN(os.Stdout, c, m.Size)
-		return err
+		if !toClipboard {
+			_, err = io.CopyN(os.Stdout, c, m.Size)
+			return err
+		}
+		b := make([]byte, m.Size)
+		if _, err = io.ReadFull(c, b); err != nil {
+			return err
+		}
+		where, err := storeOnServer(b)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "2o: %s copied to %s\n", humanSize(m.Size), where)
+		return nil
 	case "notify":
 		if len(args) != 3 {
 			return errors.New("usage: 2o notify TITLE BODY")

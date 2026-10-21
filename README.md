@@ -43,8 +43,9 @@ In a reattached tmux session whose `TWO_O_SESSION` is stale, `2o` tries the newe
 2o open https://example.com
 2o open report.pdf                   # private local cached copy, not a server file:// URL
 2o open ./folder                     # tar stream, safely extracted locally
-printf 'hello' | 2o copy             # remote stdin -> local clipboard
-2o paste > local-clipboard.txt       # local clipboard -> remote stdout
+printf 'hello' | 2o copy             # remote stdin -> desktop clipboard
+2o paste > local-clipboard.txt       # desktop clipboard -> remote stdout (file, pipe, terminal)
+2o paste -c                          # desktop clipboard -> the server's own clipboard
 2o edit report.txt                   # waits for local editor; writes back unless conflict
 2o open http://localhost:3000/page   # local browser -> remote HTTP port via SSH
 2o notify 'Build' 'Finished'
@@ -55,6 +56,16 @@ printf 'hello' | 2o copy             # remote stdin -> local clipboard
 `BROWSER` is set automatically inside `2o ssh`. The wrapper also creates `~/.local/bin/xdg-open -> 2o` on the server **if no file already exists at that path**, and prepends that directory to remote `PATH`. It never replaces an existing executable. Do not shadow `xdg-open` on the desktop: it is how the local daemon launches applications.
 
 For editing, set a *blocking graphical editor* on your **desktop** before the daemon starts, e.g. `export TWO_O_EDITOR='code --wait'` or `TWO_O_EDITOR='gvim -f'`. `VISUAL` and `EDITOR` are also accepted; otherwise a detected graphical editor is used. The editor must exit after the edit. The remote file is atomically replaced after an optimistic hash check. On conflict, the command reports the full path of the retained **local recovery copy**; the remote file is not overwritten. As with other optimistic checks, a writer racing between the final hash check and rename is not excluded. `2o open` creates only a copy; it does not sync edits back.
+
+### Clipboard on any desktop
+
+The same clipboard logic runs on both ends (the desktop daemon for `copy`/`paste`, the server for `paste -c`). It does not depend on which desktop you use: Plasma, GNOME, Hyprland, Sway, Xfce… all run on Wayland or X11, and what differs is how they let a window-less program set the clipboard.
+
+1. **Find the graphical session**, even from an SSH shell or a daemon started by systemd/autostart where `WAYLAND_DISPLAY`/`DISPLAY` are empty: current environment → `systemctl --user show-environment` (where Plasma, GNOME, Hyprland… publish their session) → the user's `wayland-*` and X11 sockets.
+2. **Try the tools available for that session**, in order: `wl-copy` (Wayland), Klipper over D-Bus (Plasma, text only), `xclip` then `xsel` (X11, and XWayland on GNOME, whose clipboard is synced with Wayland), `pbcopy` on macOS.
+3. **Read back** after each copy. Some compositors (GNOME/Mutter) let `wl-copy` exit successfully without taking the clipboard; this is detected and the next tool is tried instead of reporting a false success.
+
+`2o paste -c` on a server **without** a graphical session falls back to the tmux paste buffer (`prefix + ]`) when run inside tmux; otherwise it fails and suggests `2o paste > FILE` / `| CMD`. Install `wl-clipboard` (Wayland) or `xclip` (X11/XWayland) if neither is present.
 
 ## Limits, settings and trust
 

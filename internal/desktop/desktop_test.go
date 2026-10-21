@@ -101,54 +101,6 @@ func TestEditBlocksAndUsesEditorPrecedence(t *testing.T) {
 	}
 }
 
-func TestClipboardRoundTripWithDesktopCommand(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		t.Skip("unsupported desktop")
-	}
-	dir := t.TempDir()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	clip := filepath.Join(dir, "clip")
-	t.Setenv("TWO_O_TEST_CLIP", clip)
-	copyName, pasteName := "wl-copy", "wl-paste"
-	if runtime.GOOS == "linux" {
-		t.Setenv("WAYLAND_DISPLAY", "wayland-test")
-		t.Setenv("DISPLAY", "")
-	} else {
-		copyName, pasteName = "pbcopy", "pbpaste"
-	}
-	writeScript(t, dir, copyName, "#!/bin/sh\ncat > \"$TWO_O_TEST_CLIP\"\n")
-	writeScript(t, dir, pasteName, "#!/bin/sh\nif [ \"$1\" != '--no-newline' ] && [ \"$1\" != '' ]; then exit 9; fi\ncat \"$TWO_O_TEST_CLIP\"\n")
-	data := []byte{'a', 0, '\n', 0xff}
-	if err := Copy(data); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Paste()
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("clipboard = %q, error = %v; want %q", got, err, data)
-	}
-}
-
-func TestX11ClipboardWhenNoWayland(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("X11 is Linux-only")
-	}
-	dir := t.TempDir()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("WAYLAND_DISPLAY", "")
-	t.Setenv("DISPLAY", ":123")
-	clip := filepath.Join(dir, "clip")
-	t.Setenv("TWO_O_TEST_CLIP", clip)
-	writeScript(t, dir, "xclip", "#!/bin/sh\n[ \"$1\" = '-selection' ] && [ \"$2\" = 'clipboard' ] || exit 9\ncase \"$3\" in -in) cat > \"$TWO_O_TEST_CLIP\";; -out) cat \"$TWO_O_TEST_CLIP\";; *) exit 8;; esac\n")
-	data := []byte("line one\nline two\n")
-	if err := Copy(data); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Paste()
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("X11 clipboard = %q, error = %v; want %q", got, err, data)
-	}
-}
-
 func TestOpenPassesTargetAsArgument(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("unsupported desktop")
@@ -169,20 +121,6 @@ func TestOpenPassesTargetAsArgument(t *testing.T) {
 	got, err := os.ReadFile(marker)
 	if err != nil || string(got) != target {
 		t.Fatalf("opened = %q, error = %v", got, err)
-	}
-}
-
-func TestUnavailableClipboardIsDistinct(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux display selection")
-	}
-	t.Setenv("WAYLAND_DISPLAY", "")
-	t.Setenv("DISPLAY", "")
-	if err := Copy([]byte("x")); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("no display copy = %v, want ErrUnavailable", err)
-	}
-	if _, err := Paste(); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("no display paste = %v, want ErrUnavailable", err)
 	}
 }
 
