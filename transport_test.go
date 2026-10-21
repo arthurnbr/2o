@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,38 @@ func TestSessionHandshakeChecksExactForwardedSocket(t *testing.T) {
 	<-done
 	if err := checkSocket(filepath.Join(t.TempDir(), "missing.sock")); err == nil {
 		t.Fatal("accepted an absent forwarded socket")
+	}
+}
+
+func TestSessionHandshakeReusesRunningPreviousDaemon(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-daemon.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		msg, err := wire.Read(conn)
+		if err == nil && msg.Op != "ping" {
+			err = fmt.Errorf("unexpected operation: %s", msg.Op)
+		}
+		if err == nil {
+			err = wire.Write(conn, wire.Message{Error: "unknown operation"})
+		}
+		done <- err
+	}()
+	if err := checkSocket(path); err != nil {
+		t.Fatalf("previous running daemon should still be usable: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

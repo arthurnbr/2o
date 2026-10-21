@@ -296,7 +296,17 @@ func checkSocket(path string) error {
 	if err := wire.Write(c, wire.Message{Op: "ping"}); err != nil {
 		return err
 	}
-	return response(c)
+	reply, err := wire.Read(c)
+	if err != nil {
+		return err
+	}
+	// A daemon left running from before the status probe understands this
+	// framing but answers unknown operation. Its existing open operations
+	// remain usable until the desktop session ends.
+	if reply.Error == "" || reply.Error == "unknown operation" {
+		return nil
+	}
+	return errors.New(reply.Error)
 }
 func cacheDir() string {
 	if d := os.Getenv("XDG_CACHE_HOME"); d != "" {
