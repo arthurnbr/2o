@@ -223,7 +223,7 @@ make install                 # ~/.local/bin/2o + ~/.local/lib/2o/2o-linux-{amd64
 
 1. `git tag vX.Y.Z && git push origin vX.Y.Z`: CI tests, runs `make dist` and publishes the GitHub release.
 2. `packaging/release.sh X.Y.Z`: sets the version and release checksums in `packaging/aur/{2o,2o-bin}/PKGBUILD` and `Casks/2o.rb`, regenerates `.SRCINFO`; commit and push (the cask is served from this repository).
-3. Push each `packaging/aur/<pkg>/` to `ssh://aur@aur.archlinux.org/<pkg>.git`.
+3. `packaging/aur/publish.sh`: pushes `2o`, `2o-bin` and `2o-git` to the AUR (needs an AUR account with your SSH key).
 
 ## How it works, and what to trust
 
