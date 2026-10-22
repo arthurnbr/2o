@@ -75,6 +75,6 @@ dist: servers
 	  rm -rf $$d; \
 	done
 	set -e; for a in $(ARCHES); do cp build/2o-linux-$$a build/2o-pkg; for p in deb rpm; do \
-	  VERSION=$(PKGVERSION) GOARCH=$$a $(NFPM) package -f packaging/nfpm.yaml -p $$p -t dist/; \
+	  VERSION=$(PKGVERSION) PKGARCH=$$a $(NFPM) package -f packaging/nfpm.yaml -p $$p -t dist/; \
 	done; done; rm -f build/2o-pkg
 	cd dist && sha256sum * > SHA256SUMS

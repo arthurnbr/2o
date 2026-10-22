@@ -1,8 +1,8 @@
-# .deb and .rpm for `make dist` (VERSION and GOARCH come from the Makefile,
-# which copies build/2o-linux-$GOARCH to build/2o-pkg: nfpm does not expand
-# variables in `src`).
+# .deb and .rpm for `make dist` (VERSION and PKGARCH come from the Makefile,
+# which copies build/2o-linux-$PKGARCH to build/2o-pkg: nfpm does not expand
+# variables in `src`). Not GOARCH: `go run nfpm` would build nfpm for it.
 name: 2o
-arch: ${GOARCH}
+arch: ${PKGARCH}
 platform: linux
 version: ${VERSION}
 section: net
