@@ -1,0 +1,36 @@
+# Maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
+pkgname=2o
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Open files and URLs on your local desktop from a remote SSH shell'
+arch=('x86_64' 'aarch64')
+url='https://github.com/arthurnbr/2o'
+license=('MIT')
+depends=('openssh' 'xdg-utils')
+makedepends=('go' 'make')
+conflicts=('2o-git' '2o-bin')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+# Static, stripped binaries: `2o ssh` uploads them to remote servers,
+# including servers whose CPU differs from this machine's.
+options=('!debug' '!strip')
+
+build() {
+  cd "$pkgname-$pkgver"
+  export GOFLAGS='-mod=readonly -modcacherw'
+  make VERSION="v$pkgver" all
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  # /usr/bin/2o for this machine, /usr/lib/2o/2o-linux-{amd64,arm64} for servers.
+  # `install` rebuilds (Go cache hit): pass the same VERSION, or it stamps `dev`.
+  make VERSION="v$pkgver" DESTDIR="$pkgdir" PREFIX=/usr install
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

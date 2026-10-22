@@ -679,7 +679,9 @@ func daemonInfo(sock string) (buildInfo, int, error) {
 
 // stopDaemon asks the running daemon to exit and waits until it is gone.
 // Another 2o (a session re-holding) may start a new daemon at the same path
-// meanwhile, so "gone" means the old daemon's key is no longer the current one.
+// meanwhile, so "gone" means a new daemon's key is published, or no key and
+// no answer on the socket: close removes the key before the socket stops
+// accepting, so a missing key alone does not mean the old daemon has exited.
 func stopDaemon(sock string) error {
 	oldMaster, _, err := readKey(keyPath(sock))
 	if err != nil {
@@ -690,7 +692,7 @@ func stopDaemon(sock string) error {
 	}
 	for range 100 {
 		master, _, err := readKey(keyPath(sock))
-		if err != nil || master != oldMaster {
+		if err == nil && master != oldMaster || err != nil && !daemonAlive(sock) {
 			return nil
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -767,14 +769,15 @@ func installRemote(c *sshConn) (string, error) {
 	if len(lines) > 4 {
 		installedInfo = lines[4]
 	}
+	remote := parseBuildInfo(installedInfo)
+	_, isRelease := releaseVersion(version)
 	switch {
-	case installedSum == sum:
+	case installedSum == sum, isRelease && compareBuilds(remote, thisBuild()) == sameBuild:
 		step.Skip("2o %s is up to date on %s", version, c.host)
 		return lines[2], nil
 	case installedSum == "":
 		step.Update("installing 2o %s on %s (%s)", version, c.host, humanSize(size))
 	default:
-		remote := parseBuildInfo(installedInfo)
 		update, err := askRemoteUpdate(step, c.host, remote)
 		if err != nil || !update {
 			return lines[2], err

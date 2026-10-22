@@ -8,11 +8,13 @@ pkgbase = 2o-git
 	license = MIT
 	makedepends = git
 	makedepends = go
+	makedepends = make
 	depends = openssh
 	depends = xdg-utils
 	provides = 2o
 	conflicts = 2o
 	options = !debug
+	options = !strip
 	source = 2o-git::git+https://github.com/arthurnbr/2o.git
 	sha256sums = SKIP
 

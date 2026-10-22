@@ -197,7 +197,17 @@ Sizes accept `k`, `M`, `G`, `T` suffixes. Whatever the settings, a transfer that
 
 ## Install
 
-2o is one static binary. Install it on the **desktop**; `2o ssh` installs the server copy itself. It uploads its own binary when the server has the same CPU; for a server with another CPU it uploads the matching prebuilt `2o-linux-amd64` or `2o-linux-arm64`, looked up next to the `2o` binary, in `../lib/2o/`, then in `~/.cache/2o/bin/`. Run from inside the source checkout with Go installed, `2o ssh` builds the missing one once into that cache.
+2o is one static binary. Install it on the **desktop**; `2o ssh` installs the server copy itself. It uploads its own binary when the server has the same CPU; for a server with another CPU it uploads the matching prebuilt `2o-linux-amd64` or `2o-linux-arm64`, looked up next to the `2o` binary, in `../lib/2o/`, then in `~/.cache/2o/bin/`. Every package below ships both. Run from inside the source checkout with Go installed, `2o ssh` builds a missing one once into that cache.
+
+| Desktop | Install |
+|---|---|
+| Arch Linux (AUR) | `yay -S 2o` (built from the release), `2o-bin` (prebuilt), or `2o-git` (latest commit) |
+| macOS, Linux (Homebrew) | `brew tap arthurnbr/2o https://github.com/arthurnbr/2o && brew install --cask 2o` |
+| Debian, Ubuntu | `sudo apt install ./2o_X.Y.Z_amd64.deb` from the [latest release](https://github.com/arthurnbr/2o/releases/latest) |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./2o-X.Y.Z-1.x86_64.rpm` from the latest release |
+| Anything else | unpack `2o_X.Y.Z_OS_ARCH.tar.gz` from the latest release and keep its three binaries together in one directory on your `PATH` |
+
+Updating the package is all there is to do: the next `2o ssh` offers to restart the desktop daemon and to update each server (see [Updates](#updates)). Two releases compare by version, so the same release installed from different channels is never offered as an update.
 
 From source (Go 1.25+):
 
@@ -207,15 +217,13 @@ make install                 # ~/.local/bin/2o + ~/.local/lib/2o/2o-linux-{amd64
 # or: sudo make PREFIX=/usr/local install
 ```
 
-`make` alone builds `build/2o` (this machine) and `build/2o-linux-amd64`, `build/2o-linux-arm64` (servers). Make sure `~/.local/bin` is on your `PATH`.
+`make` alone builds `build/2o` (this machine) and `build/2o-linux-amd64`, `build/2o-linux-arm64` (servers); `make dist` builds every release asset into `dist/`. Make sure `~/.local/bin` is on your `PATH`. The PKGBUILDs are in [`packaging/aur/`](packaging/aur/), the Homebrew cask in [`Casks/2o.rb`](Casks/2o.rb).
 
-Arch Linux: [`packaging/aur/2o-git/PKGBUILD`](packaging/aur/2o-git/PKGBUILD) builds the same set (`/usr/bin/2o`, `/usr/lib/2o/2o-linux-{amd64,arm64}`):
+### Releasing
 
-```sh
-cd packaging/aur/2o-git && makepkg -si
-```
-
-Without Go on the desktop: build on any machine with Go (`make`, or `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o 2o .` for one architecture — `uname -m`: `x86_64` → `amd64`, `aarch64` → `arm64`), then copy `build/2o` and the `build/2o-linux-*` files into one directory on the desktop's `PATH`.
+1. `git tag vX.Y.Z && git push origin vX.Y.Z`: CI tests, runs `make dist` and publishes the GitHub release.
+2. `packaging/release.sh X.Y.Z`: sets the version and release checksums in `packaging/aur/{2o,2o-bin}/PKGBUILD` and `Casks/2o.rb`, regenerates `.SRCINFO`; commit and push (the cask is served from this repository).
+3. Push each `packaging/aur/<pkg>/` to `ssh://aur@aur.archlinux.org/<pkg>.git`.
 
 ## How it works, and what to trust
 

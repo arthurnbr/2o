@@ -65,19 +65,31 @@ func parseBuildInfo(s string) buildInfo {
 type drift int
 
 const (
-	sameBuild    drift = iota // identical binary or same version: nothing to do
+	sameBuild    drift = iota // identical binary or same release: nothing to do
 	peerOlder                 // peer is an older build: offer to update it
 	peerNewer                 // peer is newer than this 2o: keep it, warn
 	peerUnknown               // cannot tell (dev builds, missing info): offer to update
 	incompatible              // different protocol: they cannot talk, update is required
 )
 
+// compareBuilds orders two builds. Releases (vX.Y.Z) compare by version, so
+// one release packaged by different channels (AUR, Homebrew, .deb, tarball)
+// is the same 2o whatever its build time; other builds (git, dev) compare by
+// build time.
 func compareBuilds(peer, self buildInfo) drift {
+	pr, pok := releaseVersion(peer.version)
+	sr, sok := releaseVersion(self.version)
 	switch {
 	case peer.protocol == 0:
 		return peerUnknown // too old to report itself: offer, do not force
 	case peer.protocol != self.protocol:
 		return incompatible
+	case pok && sok && pr == sr:
+		return sameBuild
+	case pok && sok && pr.less(sr):
+		return peerOlder
+	case pok && sok:
+		return peerNewer
 	case peer.version == self.version && peer.built.Equal(self.built):
 		return sameBuild
 	case !peer.built.IsZero() && !self.built.IsZero() && peer.built.Before(self.built):
@@ -87,6 +99,35 @@ func compareBuilds(peer, self buildInfo) drift {
 	default:
 		return peerUnknown
 	}
+}
+
+type release [3]int
+
+func (a release) less(b release) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
+// releaseVersion parses a release version "vX.Y.Z" (the "v" is optional).
+// Anything else (git describe suffixes, "r15.abc1234", "dev") is not one.
+func releaseVersion(v string) (release, bool) {
+	var r release
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) != 3 {
+		return r, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || p != strconv.Itoa(n) {
+			return r, false
+		}
+		r[i] = n
+	}
+	return r, true
 }
 
 // updatePolicy is TWO_O_UPDATE: "ask" (default on a terminal), "always", "never".

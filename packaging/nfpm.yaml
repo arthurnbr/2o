@@ -1,0 +1,36 @@
+# .deb and .rpm for `make dist` (VERSION and GOARCH come from the Makefile,
+# which copies build/2o-linux-$GOARCH to build/2o-pkg: nfpm does not expand
+# variables in `src`).
+name: 2o
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
+description: Open files and URLs on your local desktop from a remote SSH shell
+vendor: Arthur Nobrega
+homepage: https://github.com/arthurnbr/2o
+license: MIT
+depends:
+  - openssh-client
+  - xdg-utils
+overrides:
+  rpm:
+    depends:
+      - openssh-clients
+      - xdg-utils
+contents:
+  # This machine's 2o, and the server binaries `2o ssh` uploads.
+  - src: build/2o-pkg
+    dst: /usr/bin/2o
+    file_info: {mode: 0755}
+  - src: build/2o-linux-amd64
+    dst: /usr/lib/2o/2o-linux-amd64
+    file_info: {mode: 0755}
+  - src: build/2o-linux-arm64
+    dst: /usr/lib/2o/2o-linux-arm64
+    file_info: {mode: 0755}
+  - src: README.md
+    dst: /usr/share/doc/2o/README.md
+    file_info: {mode: 0644}

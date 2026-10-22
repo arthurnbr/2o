@@ -42,6 +42,32 @@ func TestCompareBuilds(t *testing.T) {
 	}
 }
 
+// Releases compare by version: one release built at different times by
+// different packagers is the same 2o, and v0.10.0 is newer than v0.9.0.
+func TestCompareReleases(t *testing.T) {
+	t0 := time.Date(2026, 10, 22, 7, 0, 0, 0, time.UTC)
+	self := buildInfo{version: "v0.10.0", protocol: protocol, built: t0}
+	for name, tc := range map[string]struct {
+		peer buildInfo
+		want drift
+	}{
+		"same release, built later":    {buildInfo{"v0.10.0", protocol, t0.Add(time.Hour)}, sameBuild},
+		"older release, built later":   {buildInfo{"v0.9.0", protocol, t0.Add(time.Hour)}, peerOlder},
+		"newer release, built before":  {buildInfo{"v0.10.1", protocol, t0.Add(-time.Hour)}, peerNewer},
+		"git build, built before":      {buildInfo{"v0.10.0-3-gabc1234", protocol, t0.Add(-time.Hour)}, peerOlder},
+		"same release, other protocol": {buildInfo{"v0.10.0", protocol + 1, t0}, incompatible},
+	} {
+		if got := compareBuilds(tc.peer, self); got != tc.want {
+			t.Errorf("%s: compareBuilds = %d, want %d", name, got, tc.want)
+		}
+	}
+	for _, v := range []string{"v1.2", "1.2.3.4", "v1.02.3", "r15.506d1d1", "v1.2.3-rc1", "dev"} {
+		if _, ok := releaseVersion(v); ok {
+			t.Errorf("%q parsed as a release", v)
+		}
+	}
+}
+
 // answer makes confirmUpdate read s from a fake terminal.
 func answer(t *testing.T, s string) {
 	t.Helper()

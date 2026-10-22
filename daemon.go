@@ -122,15 +122,16 @@ func openDaemon(sock string) (*desktopDaemon, error) {
 
 // close stops accepting and removes the socket and key; serve then revokes
 // every hold and returns. Only the first call acts, so a late close never
-// removes the files of a daemon started since.
+// removes the files of a daemon started since. The control socket closes
+// last: once it stops answering, the stable port is free for a new daemon.
 func (d *desktopDaemon) close() {
 	d.closed.Do(func() {
 		_ = os.Remove(keyPath(d.sock))
-		_ = os.Remove(d.sock)
-		d.ctl.Close()
 		if d.tcp != nil {
 			d.tcp.Close()
 		}
+		_ = os.Remove(d.sock)
+		d.ctl.Close()
 	})
 }
 

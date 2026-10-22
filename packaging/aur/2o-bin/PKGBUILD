@@ -1,0 +1,29 @@
+# Maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
+pkgname=2o-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Open files and URLs on your local desktop from a remote SSH shell (release binaries)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/arthurnbr/2o'
+license=('MIT')
+depends=('openssh' 'xdg-utils')
+provides=('2o')
+conflicts=('2o' '2o-git')
+source=("LICENSE-$pkgver::https://raw.githubusercontent.com/arthurnbr/2o/v$pkgver/LICENSE")
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/2o_${pkgver}_linux_amd64.tar.gz")
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/2o_${pkgver}_linux_arm64.tar.gz")
+sha256sums=('SKIP')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+options=('!debug' '!strip')
+
+package() {
+  local goarch=amd64
+  [[ $CARCH == aarch64 ]] && goarch=arm64
+  cd "2o_${pkgver}_linux_$goarch"
+  install -Dm755 2o "$pkgdir/usr/bin/2o"
+  install -Dm755 2o-linux-amd64 "$pkgdir/usr/lib/2o/2o-linux-amd64"
+  install -Dm755 2o-linux-arm64 "$pkgdir/usr/lib/2o/2o-linux-arm64"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/2o/README.md"
+  install -Dm644 "$srcdir/LICENSE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
