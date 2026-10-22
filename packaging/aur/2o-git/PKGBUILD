@@ -7,13 +7,14 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/arthurnbr/2o'
 license=('MIT')
 depends=('openssh' 'xdg-utils')
-makedepends=('git' 'go')
+makedepends=('git' 'go' 'make')
 provides=('2o')
 conflicts=('2o')
 source=("$pkgname::git+$url.git")
 sha256sums=('SKIP')
-# Static, stripped binary: `2o ssh` uploads this same executable to remote servers.
-options=('!debug')
+# Static, stripped binaries: `2o ssh` uploads them to remote servers,
+# including servers whose CPU differs from this machine's.
+options=('!debug' '!strip')
 
 pkgver() {
   cd "$pkgname"
@@ -22,9 +23,8 @@ pkgver() {
 
 build() {
   cd "$pkgname"
-  export CGO_ENABLED=0
-  export GOFLAGS='-trimpath -mod=readonly -modcacherw'
-  go build -ldflags '-s -w' -o 2o .
+  export GOFLAGS='-mod=readonly -modcacherw'
+  make VERSION="$pkgver" all
 }
 
 check() {
@@ -34,6 +34,7 @@ check() {
 
 package() {
   cd "$pkgname"
-  install -Dm755 2o "$pkgdir/usr/bin/2o"
+  # /usr/bin/2o for this machine, /usr/lib/2o/2o-linux-{amd64,arm64} for servers.
+  make DESTDIR="$pkgdir" PREFIX=/usr install
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

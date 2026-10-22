@@ -2,6 +2,7 @@ package files
 
 import (
 	"archive/tar"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -17,6 +18,40 @@ import (
 // MaxBytes is a protocol sanity ceiling (1 TiB), not a policy: the desktop
 // daemon decides what it accepts (size cap, free space, confirmation).
 const MaxBytes int64 = 1 << 40
+
+// maxEntries bounds how many files and directories one transfer may carry;
+// lowered in tests.
+var maxEntries = 100_000
+
+// HumanSize formats a byte count for people: "512 B", "3.2 GiB", "2 GiB".
+func HumanSize(n int64) string {
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	f := float64(n)
+	i := 0
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", f), ".0") + " " + units[i]
+}
+
+// ValidName reports whether name can be the top-level name of a received file
+// or directory: one path element of valid UTF-8 without control characters or
+// separators. The desktop checks it before asking the user anything.
+func ValidName(name string) error {
+	if name == "" || name == "." || name == ".." || !utf8.ValidString(name) || strings.ContainsAny(name, "/\\") {
+		return errors.New("unsafe file name")
+	}
+	for _, r := range name {
+		if r < 32 || r == 127 {
+			return errors.New("unsafe file name")
+		}
+	}
+	return nil
+}
 
 type entry struct {
 	name string
@@ -37,7 +72,7 @@ func Prepare(p string) (name string, mode os.FileMode, size int64, reader io.Rea
 			return "", 0, 0, nil, err
 		}
 		if info.Size() > MaxBytes {
-			return "", 0, 0, nil, fmt.Errorf("file exceeds %d bytes", MaxBytes)
+			return "", 0, 0, nil, fmt.Errorf("file is %s, above the %s transfer limit", HumanSize(info.Size()), HumanSize(MaxBytes))
 		}
 		f, openErr := openChecked(p, info)
 		if openErr != nil {
@@ -100,7 +135,7 @@ func scanDirectory(root string, original os.FileInfo) ([]entry, int64, error) {
 				return err
 			}
 			if info.Size() > MaxBytes {
-				return fmt.Errorf("file exceeds %d bytes: %s", MaxBytes, p)
+				return fmt.Errorf("%s is %s, above the %s transfer limit", p, HumanSize(info.Size()), HumanSize(MaxBytes))
 			}
 			f, err := openChecked(p, info)
 			if err != nil {
@@ -126,7 +161,10 @@ func scanDirectory(root string, original os.FileInfo) ([]entry, int64, error) {
 			payload += (info.Size() + 511) / 512 * 512
 		}
 		if count.n+payload+1024 > MaxBytes {
-			return fmt.Errorf("directory exceeds %d archive bytes", MaxBytes)
+			return fmt.Errorf("directory archive exceeds the %s transfer limit", HumanSize(MaxBytes))
+		}
+		if len(entries) >= maxEntries {
+			return fmt.Errorf("directory has more than %d entries, the transfer limit", maxEntries)
 		}
 		entries = append(entries, entry{rel, info})
 		return nil
@@ -214,7 +252,7 @@ func writeArchive(dst io.Writer, path string, expected os.FileInfo, entries []en
 // be removed by the caller when no longer needed.
 func Receive(name string, mode os.FileMode, size int64, src io.Reader, base string) (result string, err error) {
 	if size < 0 || size > MaxBytes {
-		return "", fmt.Errorf("invalid transfer size: %d", size)
+		return "", fmt.Errorf("invalid transfer size %d (limit %s)", size, HumanSize(MaxBytes))
 	}
 	if name != safeName(name) || name == "" || name == "." || name == ".." {
 		return "", fmt.Errorf("unsafe name: %q", name)
@@ -261,6 +299,10 @@ func Receive(name string, mode os.FileMode, size int64, src io.Reader, base stri
 	return result, nil
 }
 
+// extract unpacks a tar stream of exactly size bytes. Besides confining paths,
+// it never writes more file data than the announced size (sparse entries are
+// refused, since they expand beyond their transported bytes) and stops after
+// maxEntries entries.
 func extract(dst string, src io.Reader, size int64) error {
 	root, err := os.OpenRoot(dst)
 	if err != nil {
@@ -270,6 +312,7 @@ func extract(dst string, src io.Reader, size int64) error {
 	limited := &io.LimitedReader{R: src, N: size}
 	tr := tar.NewReader(limited)
 	seen := make(map[string]struct{})
+	budget := size // file bytes still allowed to be written
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -277,6 +320,9 @@ func extract(dst string, src io.Reader, size int64) error {
 		}
 		if err != nil {
 			return err
+		}
+		if len(seen) >= maxEntries {
+			return fmt.Errorf("archive has more than %d entries, the transfer limit", maxEntries)
 		}
 		name := strings.TrimSuffix(h.Name, "/")
 		if err := safeRelative(name); err != nil {
@@ -286,15 +332,20 @@ func extract(dst string, src io.Reader, size int64) error {
 			return fmt.Errorf("duplicate archive path: %s", name)
 		}
 		seen[name] = struct{}{}
+		if sparse(h) {
+			return fmt.Errorf("sparse archive entry refused: %s", name)
+		}
+		// The reader already maps legacy '\x00' entries to TypeReg or TypeDir.
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := root.MkdirAll(name, 0700); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
-			if h.Size < 0 || h.Size > MaxBytes {
-				return fmt.Errorf("invalid archive file size: %d", h.Size)
+		case tar.TypeReg:
+			if h.Size < 0 || h.Size > budget {
+				return fmt.Errorf("archive entry %s (%s) expands beyond the announced transfer size of %s", name, HumanSize(h.Size), HumanSize(size))
 			}
+			budget -= h.Size
 			if err := safeFile(os.FileMode(h.Mode), path.Base(name)); err != nil {
 				return err
 			}
@@ -319,6 +370,20 @@ func extract(dst string, src io.Reader, size int64) error {
 	}
 	_, err = io.CopyN(io.Discard, limited, limited.N)
 	return err
+}
+
+// sparse reports old GNU sparse entries and PAX (GNU.sparse.*) sparse
+// entries, whose Size is the expanded size rather than the stored bytes.
+func sparse(h *tar.Header) bool {
+	if h.Typeflag == tar.TypeGNUSparse {
+		return true
+	}
+	for k := range h.PAXRecords {
+		if strings.HasPrefix(k, "GNU.sparse.") {
+			return true
+		}
+	}
+	return false
 }
 
 func copySafeFile(dst io.Writer, src io.Reader, size int64) error {
@@ -419,7 +484,7 @@ func Snapshot(p string) (sum [32]byte, mode os.FileMode, size int64, err error) 
 		return sum, 0, 0, fmt.Errorf("not a regular file: %s", p)
 	}
 	if info.Size() > MaxBytes {
-		return sum, 0, 0, fmt.Errorf("file exceeds %d bytes", MaxBytes)
+		return sum, 0, 0, fmt.Errorf("file is %s, above the %s transfer limit", HumanSize(info.Size()), HumanSize(MaxBytes))
 	}
 	f, err := openChecked(p, info)
 	if err != nil {
@@ -434,22 +499,18 @@ func Snapshot(p string) (sum [32]byte, mode os.FileMode, size int64, err error) 
 	return sum, info.Mode(), info.Size(), nil
 }
 
+// ErrConflict means the remote file changed (or appeared) while it was being
+// edited on the desktop; nothing was written.
+var ErrConflict = errors.New("edit conflict: file changed")
+
 // Commit replaces path only if its current contents equal original. A staged
 // file in the same directory makes the replacement atomic for readers.
 func Commit(p string, original [32]byte, src io.Reader, size int64) error {
-	if size < 0 || size > MaxBytes {
-		return fmt.Errorf("invalid edit size: %d", size)
-	}
-	parent := filepath.Dir(p)
-	f, err := os.CreateTemp(parent, ".2o-edit-")
+	f, err := stage(p, src, size, 0600)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err = io.CopyN(f, src, size); err != nil {
-		f.Close()
-		return err
-	}
 	current, mode, _, err := Snapshot(p)
 	if err != nil {
 		f.Close()
@@ -457,18 +518,63 @@ func Commit(p string, original [32]byte, src io.Reader, size int64) error {
 	}
 	if current != original {
 		f.Close()
-		return errors.New("edit conflict: file changed")
+		return ErrConflict
 	}
 	if err = f.Chmod(mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)); err != nil {
 		f.Close()
 		return err
 	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
+	if err = syncClose(f); err != nil {
 		return err
 	}
 	return os.Rename(f.Name(), p)
+}
+
+// Create publishes a new file at p without ever replacing an existing one:
+// if p appeared meanwhile, it returns ErrConflict. mode is filtered by the
+// process umask, as for any newly created file.
+func Create(p string, src io.Reader, size int64, mode os.FileMode) error {
+	f, err := stage(p, src, size, mode.Perm())
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = syncClose(f); err != nil {
+		return err
+	}
+	if err = os.Link(f.Name(), p); errors.Is(err, fs.ErrExist) {
+		return ErrConflict
+	}
+	return err
+}
+
+// stage writes exactly size bytes from src to a new hidden file next to p.
+// The caller removes it and must close it.
+func stage(p string, src io.Reader, size int64, perm os.FileMode) (*os.File, error) {
+	if size < 0 || size > MaxBytes {
+		return nil, fmt.Errorf("invalid edit size %d (limit %s)", size, HumanSize(MaxBytes))
+	}
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return nil, err
+	}
+	name := filepath.Join(filepath.Dir(p), fmt.Sprintf(".2o-edit-%x", suffix))
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = io.CopyN(f, src, size); err != nil {
+		f.Close()
+		os.Remove(name)
+		return nil, err
+	}
+	return f, nil
+}
+
+func syncClose(f *os.File) error {
+	err := f.Sync()
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/arthurnbr/2o/internal/desktop"
 )
 
 // paste -c fetches the desktop clipboard through the tunnel and hands it to
@@ -51,33 +53,44 @@ func TestPasteClipboardModeStoresOnServer(t *testing.T) {
 	if err != nil || out.String() != "from the desktop" {
 		t.Fatalf("plain paste = %q, %v", out.String(), err)
 	}
-	if err := run([]string{"paste", "--bogus"}); err == nil || !strings.Contains(err.Error(), "usage") {
+	if err := run([]string{"paste", "--bogus"}); err == nil || exitCode(err) != exitUsage {
 		t.Fatalf("unknown flag accepted: %v", err)
 	}
 }
 
+// Headless server: without tmux, the error says nothing could take the data;
+// inside tmux the buffer is used, with -w (OSC 52 forwarding) when tmux
+// supports it and plain load-buffer on older tmux.
 func TestStoreOnServerFallsBackToTmux(t *testing.T) {
 	bin := t.TempDir()
 	buf := filepath.Join(bin, "tmux-buffer")
-	tmux := "#!/bin/sh\n[ \"$1\" = load-buffer ] && [ \"$2\" = - ] && /bin/cat > \"" + buf + "\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(tmux), 0700); err != nil {
-		t.Fatal(err)
-	}
+	args := filepath.Join(bin, "tmux-args")
 	t.Setenv("PATH", bin) // no systemctl, no clipboard tools
 	t.Setenv("WAYLAND_DISPLAY", "")
 	t.Setenv("DISPLAY", "")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
 	t.Setenv("TMUX", "")
-	if _, err := storeOnServer([]byte("x")); err == nil || !strings.Contains(err.Error(), "2o paste > FILE") {
-		t.Fatalf("headless without tmux should explain alternatives: %v", err)
+	if _, err := storeOnServer([]byte("x")); !errors.Is(err, desktop.ErrUnavailable) {
+		t.Fatalf("headless without tmux: %v", err)
 	}
 	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
-	where, err := storeOnServer([]byte("into tmux"))
-	if err != nil || !strings.Contains(where, "tmux") {
-		t.Fatalf("tmux fallback: %q, %v", where, err)
-	}
-	if got, _ := os.ReadFile(buf); string(got) != "into tmux" {
-		t.Fatalf("tmux buffer %q", got)
+	for _, tc := range []struct{ name, script, want string }{
+		{"tmux 3.2+", "[ \"$1 $2 $3\" = 'load-buffer -w -' ] || exit 1", "load-buffer -w -"},
+		{"old tmux", "[ \"$2\" = -w ] && { echo 'load-buffer: unknown option -- w' >&2; exit 1; }\n[ \"$1 $2\" = 'load-buffer -' ] || exit 1", "load-buffer -"},
+	} {
+		script := "#!/bin/sh\n" + tc.script + "\necho \"$*\" > \"" + args + "\"\n/bin/cat > \"" + buf + "\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		where, err := storeOnServer([]byte("into tmux"))
+		if err != nil || !strings.Contains(where, "tmux") {
+			t.Fatalf("%s: %q, %v", tc.name, where, err)
+		}
+		got, _ := os.ReadFile(buf)
+		used, _ := os.ReadFile(args)
+		if string(got) != "into tmux" || strings.TrimSpace(string(used)) != tc.want {
+			t.Fatalf("%s: buffer %q via %q", tc.name, got, used)
+		}
 	}
 }

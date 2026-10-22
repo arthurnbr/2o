@@ -40,6 +40,9 @@ func SetOutput(w io.Writer) {
 // SetQuiet hides info and step lines; warnings and errors still show.
 func SetQuiet(q bool) { mu.Lock(); quiet = q; mu.Unlock() }
 
+// Quiet reports whether info lines are hidden (TWO_O_QUIET or SetQuiet).
+func Quiet() bool { mu.Lock(); defer mu.Unlock(); return quiet }
+
 // Interactive reports whether stderr is a terminal (prompts, spinners).
 func Interactive() bool { return tty }
 
@@ -86,6 +89,16 @@ func Success(format string, a ...any) {
 		return
 	}
 	line("✓", green, format, a...)
+}
+
+// Note: a dim, symbol-less aside ("tunnel closed"); hidden when quiet.
+func Note(format string, a ...any) {
+	if quiet {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	fmt.Fprintln(out, paint(dim, fmt.Sprintf(format, a...)))
 }
 
 // Warn: something the user should know but that did not fail.
@@ -141,6 +154,20 @@ func Start(format string, a ...any) *Step {
 	return s
 }
 
+// Begin starts a step that does not animate: on a terminal its label stays
+// on the current line, so a child process can prompt there (ssh asking for a
+// password) without a spinner erasing the prompt. It ends like any Step.
+func Begin(format string, a ...any) *Step {
+	s := &Step{label: fmt.Sprintf(format, a...), start: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	close(s.done)
+	mu.Lock()
+	defer mu.Unlock()
+	if redraw && !quiet {
+		fmt.Fprintf(out, "%s %s… ", paint(cyan, "•"), s.label)
+	}
+	return s
+}
+
 func (s *Step) finish(sym, code, label string, alwaysShow bool) {
 	if s.ended {
 		return
@@ -189,6 +216,37 @@ func (s *Step) End(err error) error {
 	}
 	return err
 }
+
+// Update changes a running step's label, e.g. to show transfer progress.
+// Only a live (terminal) step shows it; elsewhere the final line is printed.
+func (s *Step) Update(format string, a ...any) {
+	mu.Lock()
+	s.label = fmt.Sprintf(format, a...)
+	mu.Unlock()
+}
+
+// Warn prints a warning while the step keeps running: on a terminal it goes
+// above the spinner, which redraws on its next tick.
+func (s *Step) Warn(format string, a ...any) {
+	mu.Lock()
+	defer mu.Unlock()
+	if redraw && !quiet && !s.ended {
+		fmt.Fprint(out, "\r\x1b[2K")
+	}
+	fmt.Fprintf(out, "%s %s\n", paint(yellow, "!"), fmt.Sprintf(format, a...))
+}
+
+// Live reports whether steps redraw in place (a terminal, not quiet), so
+// callers can skip work that only feeds Update.
+func Live() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return redraw && !quiet
+}
+
+// IsTerminal reports whether f is a terminal, e.g. before writing escape
+// sequences to stdout.
+func IsTerminal(f *os.File) bool { return isTTY(f) }
 
 // Header prints a short title line, e.g. "2o → omarchy".
 func Header(format string, a ...any) {

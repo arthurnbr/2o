@@ -1,5 +1,7 @@
 # 2o — revue multi-aspects (eduvia/gpt-6-astra, HEAD ebe7007)
 
+> **Statut : tous les points P0, P1 et P2 ci-dessous sont corrigés** (campagne de correction en 6 tranches, puis intégration). Chaque correction a un test de régression ; vérification réelle sur 2serv-1 : installation, open/copy/paste/edit/notify, refus et confirmation, pont localhost (cookie → 403 sans, `Host` étranger → 421, 5 requêtes en 0,34 s pendant un flux SSE), installation multi-architecture avec le binaire arm64 embarqué, nettoyage complet. Détail des corrections : PLAN.md, section « Review fixes ». Restent hors périmètre : Windows, synchronisation de répertoires, `2o attach` pour une session ssh existante.
+
 Six reviewers en lecture seule : sécurité, qualité de code, features, fonctionnement, UX, UI des réponses. Les constats ci-dessous sont dédupliqués et classés ; chacun a été appuyé par une ligne de code ou une reproduction (essais réels sur 2serv-1 dans des répertoires jetables). Rapports complets : `agent://Securite2`, `agent://QualiteCode`, `agent://Features`, `agent://Fonctionnement2`, `agent://UX`, `agent://UIReponses`.
 
 ## P0 — à corriger d'abord (perte de données, effets de bord, sécurité)

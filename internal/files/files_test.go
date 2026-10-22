@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -364,5 +366,175 @@ func TestEditExecutableScript(t *testing.T) {
 	if _, _, _, src, err := Prepare(p); err == nil {
 		src.Close()
 		t.Fatal("open accepted executable script")
+	}
+}
+
+// block builds one raw 512-byte tar header, so tests can produce entries the
+// standard writer refuses to emit (old GNU sparse, legacy '\x00' files).
+func block(name string, typeflag byte, size int64, gnu bool, patch func(b []byte)) []byte {
+	b := make([]byte, 512)
+	copy(b[0:], name)
+	copy(b[100:], "0000644\x00")
+	copy(b[108:], "0000000\x00")
+	copy(b[116:], "0000000\x00")
+	copy(b[124:], fmt.Sprintf("%011o\x00", size))
+	copy(b[136:], "00000000000\x00")
+	b[156] = typeflag
+	if gnu {
+		copy(b[257:], "ustar  \x00")
+	} else {
+		copy(b[257:], "ustar\x0000")
+	}
+	if patch != nil {
+		patch(b)
+	}
+	copy(b[148:], "        ")
+	sum := 0
+	for _, c := range b {
+		sum += int(c)
+	}
+	copy(b[148:], fmt.Sprintf("%06o\x00 ", sum))
+	return b
+}
+
+func pad(data []byte) []byte {
+	return append(data, make([]byte, (512-len(data)%512)%512)...)
+}
+
+func paxRecords(kv ...string) []byte {
+	var b bytes.Buffer
+	for i := 0; i < len(kv); i += 2 {
+		rec := " " + kv[i] + "=" + kv[i+1] + "\n"
+		n := len(rec) + 1
+		for len(fmt.Sprint(n))+len(rec) != n {
+			n++
+		}
+		fmt.Fprintf(&b, "%d%s", n, rec)
+	}
+	return b.Bytes()
+}
+
+func receiveRaw(t *testing.T, parts ...[]byte) (dst, base string, err error) {
+	t.Helper()
+	data := bytes.Join(append(parts, make([]byte, 1024)), nil)
+	base = t.TempDir()
+	dst, err = Receive("folder", os.ModeDir|0755, int64(len(data)), bytes.NewReader(data), base)
+	return dst, base, err
+}
+
+// A sparse entry transports a few bytes but expands to its "real" size: the
+// review measured 10 KiB announced, 64 MiB written. Both encodings are refused
+// and nothing is left behind.
+func TestRejectSparseArchiveEntries(t *testing.T) {
+	const real = 64 << 20
+	payload := pad([]byte("tail"))
+	oldGNU := block("bomb", 'S', int64(len(payload)), true, func(b []byte) {
+		copy(b[386:], fmt.Sprintf("%011o\x00", real-512)) // sparse map: data at the end
+		copy(b[398:], fmt.Sprintf("%011o\x00", 512))
+		copy(b[483:], fmt.Sprintf("%011o\x00", real)) // realsize
+	})
+	records := paxRecords("GNU.sparse.major", "1", "GNU.sparse.minor", "0", "GNU.sparse.name", "bomb", "GNU.sparse.realsize", fmt.Sprint(real))
+	sparseMap := pad([]byte("1\n" + fmt.Sprint(real-512) + "\n512\n"))
+	paxData := append(sparseMap, payload...)
+	for name, parts := range map[string][][]byte{
+		"old GNU": {oldGNU, payload},
+		"PAX 1.0": {block("pax", 'x', int64(len(records)), false, nil), pad(records), block("GNUSparseFile.0/bomb", '0', int64(len(paxData)), false, nil), paxData},
+		"PAX unknown version": {
+			block("pax", 'x', int64(len(paxRecords("GNU.sparse.major", "9"))), false, nil), pad(paxRecords("GNU.sparse.major", "9")),
+			block("bomb", '0', int64(len(payload)), false, nil), payload,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, base, err := receiveRaw(t, parts...)
+			if err == nil {
+				t.Fatal("accepted sparse archive")
+			}
+			if !strings.Contains(err.Error(), "sparse") {
+				t.Fatalf("refused for another reason: %v", err)
+			}
+			if entries, _ := os.ReadDir(base); len(entries) != 0 {
+				t.Fatalf("left files after refused sparse archive: %v", entries)
+			}
+		})
+	}
+}
+
+// Old archives mark regular files with '\x00' instead of '0'.
+func TestLegacyRegularEntryAccepted(t *testing.T) {
+	data := pad([]byte("hello"))
+	dst, _, err := receiveRaw(t, block("old.txt", 0, 5, false, nil), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "old.txt")); err != nil || string(got) != "hello" {
+		t.Fatalf("legacy entry: %q %v", got, err)
+	}
+}
+
+func TestEntryCount(t *testing.T) {
+	old := maxEntries
+	maxEntries = 3
+	t.Cleanup(func() { maxEntries = old })
+
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	for i := range 4 {
+		if err := w.WriteHeader(&tar.Header{Name: fmt.Sprintf("d%d/", i), Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	_, err := Receive("folder", os.ModeDir|0755, int64(b.Len()), bytes.NewReader(b.Bytes()), base)
+	if err == nil || !strings.Contains(err.Error(), "more than 3 entries") {
+		t.Fatalf("entry cap not enforced on receive: %v", err)
+	}
+	if entries, _ := os.ReadDir(base); len(entries) != 0 {
+		t.Fatalf("left files: %v", entries)
+	}
+
+	root := filepath.Join(t.TempDir(), "many")
+	for i := range 3 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprint(i)), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, src, err := Prepare(root); err != nil {
+		t.Fatalf("3 entries is within the cap: %v", err)
+	} else {
+		src.Close()
+	}
+	if err := os.Mkdir(filepath.Join(root, "3"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := Prepare(root); err == nil {
+		t.Fatal("entry cap not enforced on send")
+	}
+}
+
+func TestCreateNeverReplaces(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "new.txt")
+	if err := Create(p, strings.NewReader("first"), 5, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(p, strings.NewReader("second"), 6, 0640); !errors.Is(err, ErrConflict) {
+		t.Fatalf("existing file: want ErrConflict, got %v", err)
+	}
+	if got, _ := os.ReadFile(p); string(got) != "first" {
+		t.Fatalf("existing file overwritten: %q", got)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(p))
+	if len(entries) != 1 {
+		t.Fatalf("staging file left behind: %v", entries)
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1 << 10: "1 KiB", 3<<30 + 1<<28: "3.2 GiB", 2 << 30: "2 GiB"} {
+		if got := HumanSize(n); got != want {
+			t.Errorf("HumanSize(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

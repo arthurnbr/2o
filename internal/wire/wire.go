@@ -20,6 +20,21 @@ type Message struct {
 	Hash  string `json:"hash,omitempty"`
 	Token string `json:"token,omitempty"`
 	Error string `json:"error,omitempty"`
+
+	Desktop string   `json:"desktop,omitempty"` // desktop identity label (user@host)
+	Version string   `json:"version,omitempty"` // 2o release of the sender
+	Line    int      `json:"line,omitempty"`    // edit FILE:LINE
+	Path    string   `json:"path,omitempty"`    // edit recovery copy on the desktop
+	Hints   []string `json:"hints,omitempty"`   // userError hints
+	Code    int      `json:"code,omitempty"`    // userError exit code
+	Checks  []Check  `json:"checks,omitempty"`  // doctor reply
+}
+
+// Check is one line of a `2o doctor` report.
+type Check struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 func Write(w io.Writer, m Message) error {
