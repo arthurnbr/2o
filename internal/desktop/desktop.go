@@ -37,15 +37,46 @@ type limitError struct{ msg string }
 func (e limitError) Error() string      { return e.msg }
 func (limitError) Is(target error) bool { return target == ErrTooLarge }
 
-// Open opens a URL or local path with the desktop's associated application.
-// No timeout: some openers only return when the application closes.
+// openGrace is how long Open watches the opener before reporting success.
+// xdg-open's generic mode (Hyprland, Sway, …) runs the viewer in the
+// foreground and returns only when its window closes; real failures (no
+// application for the type, missing file) exit within this delay.
+var openGrace = 1500 * time.Millisecond
+
+// Open opens a URL or local path with the desktop's associated application
+// and returns once it is launched, not when the application exits: the
+// opener keeps running detached in its own process group. A failure that
+// happens within openGrace is reported.
 func Open(target string) error {
 	path, err := opener()
 	if err != nil {
 		return err
 	}
-	_, err = runTool(toolCall{name: path, args: []string{target}})
-	return err
+	errFile, err := os.CreateTemp("", "2o-open-")
+	if err != nil {
+		return err
+	}
+	_ = os.Remove(errFile.Name())
+	defer errFile.Close()
+	cmd := exec.Command(path, target)
+	cmd.Stderr = errFile // a file, not a pipe: children may keep it open
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return commandError(path, err, "")
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }() // reaps it whenever it ends
+	select {
+	case err := <-exited:
+		if err == nil {
+			return nil
+		}
+		_, _ = errFile.Seek(0, io.SeekStart)
+		msg, _ := io.ReadAll(io.LimitReader(errFile, 4096))
+		return commandError(path, err, string(msg))
+	case <-time.After(openGrace):
+		return nil // still running: the application is open
+	}
 }
 
 // opener finds the system's xdg-open (open on macOS) on PATH, skipping any
