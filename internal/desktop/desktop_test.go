@@ -242,7 +242,7 @@ func TestDoctor(t *testing.T) {
 	}
 	want := map[string]string{
 		"graphical session": "Wayland wayland-0, KDE (from systemd user session)",
-		"opener":            "xdg-open",
+		"opener":            "/fake/xdg-open",
 		"clipboard":         "wl-clipboard, Klipper (KDE) (read only)",
 		"notifications":     "notification daemon supports Accept/Refuse buttons",
 		"editor":            "kate --block",

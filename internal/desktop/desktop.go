@@ -40,21 +40,69 @@ func (limitError) Is(target error) bool { return target == ErrTooLarge }
 // Open opens a URL or local path with the desktop's associated application.
 // No timeout: some openers only return when the application closes.
 func Open(target string) error {
-	name := ""
-	switch runtime.GOOS {
+	path, err := opener()
+	if err != nil {
+		return err
+	}
+	_, err = runTool(toolCall{name: path, args: []string{target}})
+	return err
+}
+
+// opener finds the system's xdg-open (open on macOS) on PATH, skipping any
+// that is 2o itself: the `xdg-open -> 2o` shim 2o puts on servers would, on a
+// machine that is both a desktop and a 2o server, hand files back to 2o,
+// which sends them to this daemon again, forever.
+func opener() (string, error) {
+	name := "xdg-open"
+	switch goos {
 	case "linux":
-		name = "xdg-open"
 	case "darwin":
 		name = "open"
 	default:
-		return fmt.Errorf("%w: open on %s", ErrUnavailable, runtime.GOOS)
+		return "", fmt.Errorf("%w: open on %s", ErrUnavailable, goos)
 	}
-	if err := available(name); err != nil {
-		return err
+	p, err := lookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s is not installed", ErrUnavailable, name)
 	}
-	_, err := runTool(toolCall{name: name, args: []string{target}})
-	return err
+	if !isTwoO(p) {
+		return p, nil
+	}
+	// The first one on PATH is 2o's shim: take the next real one.
+	for _, dir := range filepath.SplitList(getenv("PATH")) {
+		if dir == "" {
+			dir = "."
+		}
+		c := filepath.Join(dir, name)
+		st, err := os.Stat(c)
+		if err == nil && !st.IsDir() && st.Mode()&0111 != 0 && !isTwoO(c) {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("%w: only 2o's own %s link was found on PATH; install xdg-utils", ErrUnavailable, name)
 }
+
+// isTwoO reports whether p is a 2o binary: the running one, or any file
+// named 2o it links to (another 2o build installed elsewhere).
+func isTwoO(p string) bool {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	if filepath.Base(real) == "2o" {
+		return true
+	}
+	self, err := selfExecutable()
+	if err != nil {
+		return false
+	}
+	a, errA := os.Stat(real)
+	b, errB := os.Stat(self)
+	return errA == nil && errB == nil && os.SameFile(a, b)
+}
+
+// selfExecutable is the running binary; replaced in tests.
+var selfExecutable = os.Executable
 
 // Notify displays a desktop notification; unsupported or headless sessions fail visibly.
 func Notify(title, body string) error {

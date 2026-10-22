@@ -38,14 +38,11 @@ func sessionCheck(s Session) CheckResult {
 }
 
 func openerCheck() CheckResult {
-	name := "xdg-open"
-	if goos == "darwin" {
-		name = "open"
+	p, err := opener()
+	if err != nil {
+		return CheckResult{Name: "opener", Detail: strings.TrimPrefix(err.Error(), ErrUnavailable.Error()+": ")}
 	}
-	if !has(name) {
-		return CheckResult{Name: "opener", Detail: name + " is not installed"}
-	}
-	return CheckResult{Name: "opener", OK: true, Detail: name}
+	return CheckResult{Name: "opener", OK: true, Detail: p}
 }
 
 func clipboardCheck(s Session) CheckResult {
