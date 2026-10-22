@@ -20,7 +20,12 @@ jobs:
           go-version: stable
       - run: go test ./...
       - name: Build release assets
-        run: make dist VERSION="$GITHUB_REF_NAME" SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+        run: |
+          set -o pipefail
+          make dist VERSION="$GITHUB_REF_NAME" SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" 2>&1 | tee dist.log
+      - name: Report build failure
+        if: failure()
+        run: tail -n 15 dist.log | sed 's/^/::error::/'
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
