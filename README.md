@@ -104,7 +104,7 @@ $ 2o ssh myserver                                     # on the desktop
 2o → myserver
 – desktop daemon already running
 ✓ connecting to myserver
-– 2o is up to date on myserver                        # or: installing 2o on myserver (10.6 MiB)
+– 2o v0.4.1 is up to date on myserver                 # or: installing 2o v0.4.1 on myserver (10.6 MiB)
 ✓ opening tunnel
 ✓ desktop tunnel ready — files, links and clipboard now open on me@laptop
 
@@ -138,6 +138,31 @@ Errors are one line, then what to do:
 
 Set `TWO_O_QUIET=1` (or `2o ssh -q`) to keep only warnings and errors; `NO_COLOR=1` disables colours.
 
+### Updates
+
+Install a new 2o on the **desktop** only; the next `2o ssh` brings everything else up to date and asks first:
+
+```text
+$ 2o ssh myserver
+2o → myserver
+– desktop daemon already running
+! older desktop daemon detected: v0.4.0 (this 2o is v0.4.1)
+? restart it with 2o v0.4.1? (1 open session will reconnect) [Y/n]
+✓ restarting desktop daemon with 2o v0.4.1
+✓ connecting to myserver
+– checked 2o on myserver
+! older 2o detected on myserver: v0.4.0 (this desktop has v0.4.1)
+? update 2o on myserver to v0.4.1? [Y/n]
+✓ updating 2o on myserver: v0.4.0 → v0.4.1 (10.6 MiB)
+✓ opening tunnel
+```
+
+- **Enter** means yes. Answering **n** keeps the old copy for now (you are asked again next time).
+- **Open sessions keep working**: when the desktop daemon is restarted they reconnect to the new one on the same port, without restarting the old build.
+- A server with a **newer** 2o than the desktop is kept unless you agree to replace it (default **N**); update the desktop instead.
+- A server 2o speaking an **incompatible protocol** must be updated to continue (declining stops `2o ssh`, exit 2).
+- Without a terminal to ask (scripts, CI), the default applies and is reported; set `TWO_O_UPDATE=always` or `never` to decide in advance.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -162,6 +187,7 @@ Transfer limits are decided by **the desktop**; the server only announces sizes,
 | `TWO_O_CLIPBOARD_BYTES` | desktop | `16M` | Clipboard size for `copy`/`paste` (held in memory). |
 | `TWO_O_CACHE_DAYS` | desktop | `7` | Received copies in `~/.cache/2o` older than this are deleted (at daemon start, then every 6 h). `0` = keep everything. Edit recovery copies are never deleted. |
 | `TWO_O_QUIET` | both | unset | `1`: only warnings and errors on stderr. |
+| `TWO_O_UPDATE` | desktop | `ask` | When `2o ssh` finds an older desktop daemon or another 2o on the server: `ask` ([Y/n] on the terminal), `always`, or `never`. |
 | `NO_COLOR` | both | unset | No colours. |
 | `TWO_O_SESSION` | server | set by `2o ssh` | The session file this shell uses. In a reattached tmux whose session is gone, 2o only moves to another live session of the **same** desktop; otherwise it lists them so you pick one with `export TWO_O_SESSION=…`. |
 | `TWO_O_DESKTOP` | server | set by `2o ssh` | Label (`user@host`) of the desktop of this shell, for messages. |

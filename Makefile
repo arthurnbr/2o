@@ -12,10 +12,10 @@ PREFIX  ?= $(HOME)/.local
 BINDIR  ?= $(PREFIX)/bin
 LIBDIR  ?= $(PREFIX)/lib/2o
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-ARCHES  := amd64 arm64
+BUILT   ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 GOFLAGS_REL := -trimpath
-LDFLAGS     := -s -w -X main.version=$(VERSION)
+LDFLAGS     := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILT)
 export CGO_ENABLED := 0
 
 .PHONY: all desktop servers install uninstall test clean

@@ -258,6 +258,14 @@ func Header(format string, a ...any) {
 	fmt.Fprintln(out, paint(bold, fmt.Sprintf(format, a...)))
 }
 
+// Prompt writes a question without a newline, for a Y/n answer typed on the
+// same line. It is shown even when quiet: the user must see what is asked.
+func Prompt(format string, a ...any) {
+	mu.Lock()
+	defer mu.Unlock()
+	fmt.Fprintf(out, "%s %s", paint(yellow, "?"), fmt.Sprintf(format, a...))
+}
+
 // Table prints aligned "key  value" rows (used by doctor/status -v).
 func Table(rows [][2]string) {
 	w := 0

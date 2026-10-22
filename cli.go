@@ -77,6 +77,7 @@ var commands = []command{
 	// Internal: started by 2o ssh, not shown in help.
 	{name: "daemon", summary: "run the desktop daemon (2o ssh starts it)", hidden: true},
 	{name: "shell", summary: "start a login shell (used by 2o ssh)", hidden: true},
+	{name: "version-info", summary: "print VERSION PROTOCOL BUILDTIME (used by 2o ssh)", hidden: true},
 }
 
 func lookup(name string) (command, bool) {
@@ -252,6 +253,10 @@ func run(args []string) error {
 				return nil
 			}
 		}
+	}
+	if name == "version-info" {
+		fmt.Println(versionInfoLine())
+		return nil
 	}
 	switch name {
 	case "daemon":

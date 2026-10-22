@@ -515,6 +515,13 @@ func (r *registry) holdControl(c net.Conn, m wire.Message) error {
 	return nil
 }
 
+// sessions is how many sessions are currently held.
+func (r *registry) sessions() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.holds)
+}
+
 // Errors reported to holdSession's notify callback.
 var (
 	errHoldLost   = errors.New("desktop daemon went away")
@@ -548,7 +555,7 @@ func holdSession(sock, master, id, token, desktop string, notify func(error)) (r
 		notify = func(error) {}
 	}
 	h := &holder{conn: c, done: make(chan struct{})}
-	go h.watch(addr, id, token, desktop, notify)
+	go h.watch(sock, addr, id, token, desktop, notify)
 	return h.release, nil
 }
 
@@ -570,7 +577,7 @@ func (h *holder) release() {
 	h.conn.Close()
 }
 
-func (h *holder) watch(addr, id, token, desktop string, notify func(error)) {
+func (h *holder) watch(sock, addr, id, token, desktop string, notify func(error)) {
 	for {
 		h.mu.Lock()
 		c := h.conn
@@ -582,7 +589,7 @@ func (h *holder) watch(addr, id, token, desktop string, notify func(error)) {
 		default:
 		}
 		notify(errHoldLost)
-		err := h.rehold(addr, id, token, desktop)
+		err := h.rehold(sock, addr, id, token, desktop)
 		select {
 		case <-h.done:
 			return
@@ -595,11 +602,26 @@ func (h *holder) watch(addr, id, token, desktop string, notify func(error)) {
 	}
 }
 
-func (h *holder) rehold(addr, id, token, desktop string) error {
-	deadline := time.Now().Add(30 * time.Second)
+// holdGrace is how long a holder waits for someone else (the 2o that
+// stopped the daemon to replace it) to start the daemon before starting one
+// itself. Without it, an open session running an older 2o would win the race
+// and restart the very build that was just replaced.
+var holdGrace = 5 * time.Second
+
+func (h *holder) rehold(held, addr, id, token, desktop string) error {
+	start := time.Now()
+	deadline := start.Add(30 * time.Second)
 	wait := 100 * time.Millisecond
 	for {
-		sock, err := restartDaemon()
+		var sock string
+		var err error
+		if time.Since(start) < holdGrace {
+			if sock = held; !daemonAlive(sock) {
+				err = errHoldLost
+			}
+		} else {
+			sock, err = restartDaemon()
+		}
 		if err == nil {
 			var master, newAddr string
 			if master, newAddr, err = readKey(keyPath(sock)); err == nil {

@@ -201,7 +201,7 @@ func TestSSHProgressAndUpToDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := out.String()
-	for _, want := range []string{"2o → myhost\n", "✓ connecting to myhost\n", "✓ installing 2o on myhost (", "✓ opening tunnel\n",
+	for _, want := range []string{"2o → myhost\n", "✓ connecting to myhost\n", "✓ installing 2o " + version + " on myhost (", "✓ opening tunnel\n",
 		"✓ desktop tunnel ready — files, links and clipboard now open on " + desktopLabel() + "\n", "tunnel closed\n"} {
 		if !strings.Contains(first, want) {
 			t.Fatalf("progress lacks %q:\n%s", want, first)
@@ -218,7 +218,7 @@ func TestSSHProgressAndUpToDate(t *testing.T) {
 	if err := sshSession([]string{"myhost", "true"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "– 2o is up to date on myhost\n") || strings.Contains(out.String(), "installing") {
+	if !strings.Contains(out.String(), "– 2o "+version+" is up to date on myhost\n") || strings.Contains(out.String(), "installing") {
 		t.Fatalf("second run should not reinstall:\n%s", out)
 	}
 	out.Reset()

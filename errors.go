@@ -5,8 +5,17 @@ import (
 	"fmt"
 )
 
-// version is set at build time: go build -ldflags "-X main.version=v0.3.0".
-var version = "dev"
+// version and buildTime are set at build time by the Makefile:
+// go build -ldflags "-X main.version=v0.3.0 -X main.buildTime=2026-10-22T07:00:00Z".
+var (
+	version   = "dev"
+	buildTime = ""
+)
+
+// protocol is the desktop↔server wire protocol. Two 2o builds with the same
+// protocol interoperate, even if their versions differ; bump it on any
+// incompatible change to the handshake or the request/reply messages.
+const protocol = 3
 
 // userError is a failure explained for humans: a one-line message, optional
 // hints ("→ …"), and the process exit code. main prints it with ui.Error/Hint.

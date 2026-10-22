@@ -383,9 +383,12 @@ func TestDaemonKeepsPortAcrossRestarts(t *testing.T) {
 	}
 }
 
-// A restarted daemon gets the hold back without the holder doing anything,
-// and the session's token works again on the same port.
+// When nobody else restarts it, a holder starts the daemon itself after the
+// grace period, gets the hold back, and the token works again on the same port.
 func TestHoldSurvivesDaemonRestart(t *testing.T) {
+	oldGrace := holdGrace
+	holdGrace = 50 * time.Millisecond
+	t.Cleanup(func() { holdGrace = oldGrace })
 	sock := filepath.Join(daemonDir(t), "2o.sock")
 	d, stopped := runDaemon(t, sock)
 	master, addr, err := readKey(keyPath(sock))
@@ -422,6 +425,57 @@ func TestHoldSurvivesDaemonRestart(t *testing.T) {
 		t.Fatalf("re-hold failed: %v", e)
 	}
 	defer (<-restarted).close()
+	c, err := dialSession(s, wire.Message{Op: "ping"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+}
+
+// A daemon replaced by a newer 2o must stay replaced: an open session whose
+// daemon stopped waits for the replacement instead of restarting its own
+// (older) build first.
+func TestHolderDoesNotRaceTheReplacement(t *testing.T) {
+	sock := filepath.Join(daemonDir(t), "2o.sock")
+	d, stopped := runDaemon(t, sock)
+	master, addr, err := readKey(keyPath(sock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfStarts := 0
+	old := restartDaemon
+	restartDaemon = func() (string, error) { selfStarts++; return "", errors.New("holder must not start the daemon") }
+	t.Cleanup(func() { restartDaemon = old })
+	s := session{addr: addr}
+	s.id, _ = randomHex(12)
+	s.token, _ = randomHex(32)
+	events := make(chan error, 4)
+	release, err := holdSession(sock, master, s.id, s.token, "me@desk", func(e error) { events <- e })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	d.close() // the old daemon exits; the "new 2o" starts its own 300ms later
+	<-stopped
+	time.Sleep(300 * time.Millisecond)
+	replacement, err := openDaemon(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = replacement.serve() }()
+	defer func() { replacement.close(); <-done }()
+
+	if e := <-events; !errors.Is(e, errHoldLost) {
+		t.Fatalf("first event %v", e)
+	}
+	if e := <-events; e != nil {
+		t.Fatalf("not re-held on the replacement: %v", e)
+	}
+	if selfStarts != 0 {
+		t.Fatalf("the holder started a daemon %d times during the grace period", selfStarts)
+	}
 	c, err := dialSession(s, wire.Message{Op: "ping"})
 	if err != nil {
 		t.Fatal(err)

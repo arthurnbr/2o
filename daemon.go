@@ -76,6 +76,7 @@ type desktopDaemon struct {
 	ctl    net.Listener // master-authenticated holds (Unix socket, mode 0600)
 	tcp    net.Listener // session-authenticated requests from SSH forwards
 	reg    *registry
+	build  string // versionInfoLine() of the binary that opened it
 	closed sync.Once
 }
 
@@ -103,7 +104,7 @@ func openDaemon(sock string) (*desktopDaemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &desktopDaemon{sock: sock, ctl: ctl, reg: newRegistry(master)}
+	d := &desktopDaemon{sock: sock, ctl: ctl, reg: newRegistry(master), build: versionInfoLine()}
 	if err = os.Chmod(sock, 0600); err == nil {
 		// SSH remote forwards target TCP on the desktop: the loopback
 		// listener only answers sessions authenticated with a held secret.
@@ -164,7 +165,7 @@ func (d *desktopDaemon) serve() error {
 			}
 			return err
 		}
-		go serveControl(d.reg, c)
+		go serveControl(d, c)
 	}
 }
 
@@ -224,16 +225,28 @@ func refuseBusy(c net.Conn) {
 	})
 }
 
-func serveControl(reg *registry, c net.Conn) {
+// serveControl answers the master-authenticated control socket: "hold" (a
+// session's lifetime), "info" (version and held sessions) and "shutdown"
+// (exit so a newer 2o can start; held sessions re-hold on the new daemon).
+func serveControl(d *desktopDaemon, c net.Conn) {
 	defer c.Close()
 	if c.SetDeadline(time.Now().Add(handshakeTimeout)) != nil {
 		return
 	}
 	m, err := wire.Read(c)
 	if err == nil {
-		if m.Op == "hold" {
-			err = reg.holdControl(c, m)
-		} else {
+		switch {
+		case m.Op == "hold":
+			err = d.reg.holdControl(c, m)
+		case !equal(m.Token, d.reg.master):
+			err = errUnauthorized
+		case m.Op == "info":
+			err = wire.Write(c, wire.Message{Version: d.build, Size: int64(d.reg.sessions())})
+		case m.Op == "shutdown":
+			if err = wire.Write(c, wire.Message{}); err == nil {
+				d.close()
+			}
+		default:
 			err = errUnauthorized
 		}
 	}

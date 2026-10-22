@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/arthurnbr/2o/internal/ui"
+	"github.com/arthurnbr/2o/internal/wire"
 )
 
 // `2o ssh HOST` opens one private OpenSSH connection master (one
@@ -456,7 +457,9 @@ var remoteTmp = "/tmp"
 
 const remoteBin = `"$HOME/.local/bin/2o"`
 
-const probeScript = `uname -s; uname -m; id -u; b="$HOME/.local/bin/2o"; if test -f "$b"; then sha256sum "$b" | cut -d ' ' -f 1; fi`
+// probeScript prints: OS, CPU, uid, then (if 2o is installed) its sha256 and
+// the line from `2o version-info` (empty for builds older than that command).
+const probeScript = `uname -s; uname -m; id -u; b="$HOME/.local/bin/2o"; if test -f "$b"; then sha256sum "$b" | cut -d ' ' -f 1; "$b" version-info 2>/dev/null </dev/null | head -n 1; fi`
 
 // uploadScript installs stdin as ~/.local/bin/2o: a unique temporary file
 // (mktemp, created exclusively), checked against sum, then renamed over the
@@ -609,13 +612,28 @@ func (r *signalRelay) interrupted(err error) error {
 	return err
 }
 
+// startDaemon makes sure this desktop's daemon runs, and offers to restart
+// one left running by another 2o build (e.g. after an update).
 func startDaemon() (string, error) {
 	s := ui.Start("starting desktop daemon")
-	if p, err := socketPath(); err == nil && daemonAlive(p) {
+	p, err := socketPath()
+	if err == nil && daemonAlive(p) {
+		info, sessions, ierr := daemonInfo(p)
+		if ierr != nil || compareBuilds(info, thisBuild()) == sameBuild {
+			s.Skip("desktop daemon already running")
+			return p, nil
+		}
 		s.Skip("desktop daemon already running")
-		return p, nil
+		if !askRestartDaemon(info, sessions) {
+			return p, nil
+		}
+		s = ui.Start("restarting desktop daemon with 2o %s", version)
+		if err = stopDaemon(p); err != nil {
+			s.Fail()
+			return "", fail("could not stop the old desktop daemon").hint("stop it yourself: pkill -f '2o daemon'").because(err)
+		}
 	}
-	p, err := ensureDaemon()
+	p, err = restartDaemon()
 	if err != nil {
 		s.Fail()
 		return "", fail("could not start the desktop daemon").hint("see its log: %s", daemonLog()).because(err)
@@ -624,8 +642,90 @@ func startDaemon() (string, error) {
 	return p, nil
 }
 
+// askRestartDaemon reports the running daemon's version and asks to replace
+// it with this 2o. Its open sessions survive: they re-attach to the new one.
+func askRestartDaemon(info buildInfo, sessions int) bool {
+	if compareBuilds(info, thisBuild()) == peerNewer {
+		ui.Warn("the desktop daemon runs a newer 2o (%s) than this one (%s)", info.label(thisBuild()), thisBuild().label(info))
+		return confirmUpdate("restart it with this older 2o?", false)
+	}
+	ui.Warn("older desktop daemon detected: %s (this 2o is %s)", info.label(thisBuild()), thisBuild().label(info))
+	q := "restart it with 2o " + version + "?"
+	if sessions > 0 {
+		q = fmt.Sprintf("restart it with 2o %s? (%d open session%s will reconnect)", version, sessions, plural(sessions))
+	}
+	if confirmUpdate(q, true) {
+		return true
+	}
+	ui.Note("keeping the running desktop daemon %s", info.label(thisBuild()))
+	return false
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// daemonInfo asks the running daemon for its build and held sessions.
+func daemonInfo(sock string) (buildInfo, int, error) {
+	m, err := controlCall(sock, "info")
+	if err != nil {
+		return buildInfo{}, 0, err
+	}
+	return parseBuildInfo(m.Version), int(m.Size), nil
+}
+
+// stopDaemon asks the running daemon to exit and waits until it is gone.
+// Another 2o (a session re-holding) may start a new daemon at the same path
+// meanwhile, so "gone" means the old daemon's key is no longer the current one.
+func stopDaemon(sock string) error {
+	oldMaster, _, err := readKey(keyPath(sock))
+	if err != nil {
+		return err
+	}
+	if _, err = controlCall(sock, "shutdown"); err != nil {
+		return err
+	}
+	for range 100 {
+		master, _, err := readKey(keyPath(sock))
+		if err != nil || master != oldMaster {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return errors.New("the daemon is still running after 2s")
+}
+
+// controlCall sends one master-authenticated op on the control socket.
+func controlCall(sock, op string) (wire.Message, error) {
+	master, _, err := readKey(keyPath(sock))
+	if err != nil {
+		return wire.Message{}, err
+	}
+	c, err := net.DialTimeout("unix", sock, dialTimeout)
+	if err != nil {
+		return wire.Message{}, err
+	}
+	defer c.Close()
+	if err = c.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+		return wire.Message{}, err
+	}
+	if err = wire.Write(c, wire.Message{Op: op, Token: master}); err != nil {
+		return wire.Message{}, err
+	}
+	m, err := wire.Read(c)
+	if err == nil && m.Error != "" {
+		err = errors.New(m.Error)
+	}
+	return m, err
+}
+
 // installRemote makes ~/.local/bin/2o on the server match the binary for its
-// CPU, and returns the server-side user id.
+// CPU, and returns the server-side user id. A different installed build is
+// reported with its version and replaced only if the user agrees (or
+// TWO_O_UPDATE says so); an incompatible one must be replaced to continue.
 func installRemote(c *sshConn) (string, error) {
 	step := ui.Start("checking 2o on %s", c.host)
 	info, err := c.run(probeScript, nil)
@@ -653,18 +753,34 @@ func installRemote(c *sshConn) (string, error) {
 		if bin, err = buildBinary("linux", arch); err != nil {
 			return "", err
 		}
-		step = ui.Start("installing 2o on %s", c.host)
+		step = ui.Start("checking 2o on %s", c.host)
 	}
 	sum, size, err := fileDigest(bin)
 	if err != nil {
 		step.Fail()
 		return "", fail("cannot read %s", bin).because(err)
 	}
-	if len(lines) > 3 && lines[3] == sum {
-		step.Skip("2o is up to date on %s", c.host)
-		return lines[2], nil
+	installedSum, installedInfo := "", ""
+	if len(lines) > 3 {
+		installedSum = lines[3]
 	}
-	step.Update("installing 2o on %s (%s)", c.host, humanSize(size))
+	if len(lines) > 4 {
+		installedInfo = lines[4]
+	}
+	switch {
+	case installedSum == sum:
+		step.Skip("2o %s is up to date on %s", version, c.host)
+		return lines[2], nil
+	case installedSum == "":
+		step.Update("installing 2o %s on %s (%s)", version, c.host, humanSize(size))
+	default:
+		remote := parseBuildInfo(installedInfo)
+		update, err := askRemoteUpdate(step, c.host, remote)
+		if err != nil || !update {
+			return lines[2], err
+		}
+		step = ui.Start("updating 2o on %s: %s → %s (%s)", c.host, remote.label(thisBuild()), thisBuild().label(remote), humanSize(size))
+	}
 	f, err := os.Open(bin)
 	if err != nil {
 		step.Fail()
@@ -677,6 +793,43 @@ func installRemote(c *sshConn) (string, error) {
 	}
 	step.Done()
 	return lines[2], nil
+}
+
+// askRemoteUpdate ends step with what was found on the server and asks
+// whether to replace it with this desktop's build. A build speaking another
+// protocol cannot work with this one: declining is then an error.
+func askRemoteUpdate(step *ui.Step, host string, remote buildInfo) (bool, error) {
+	step.Skip("checked 2o on %s", host)
+	switch compareBuilds(remote, thisBuild()) {
+	case incompatible:
+		ui.Warn("%s has 2o %s, which cannot work with this desktop's 2o %s", host, remote, version)
+		if confirmUpdate(fmt.Sprintf("update 2o on %s to %s? (required)", host, version), true) {
+			return true, nil
+		}
+		return false, fail("2o on %s was not updated", host).
+			hint("its version cannot work with this desktop's 2o %s", version).
+			hint("run 2o ssh %s again and answer y, or set TWO_O_UPDATE=always", host).exit(exitUsage)
+	case peerNewer:
+		ui.Warn("%s has a newer 2o (%s) than this desktop (%s)", host, remote.label(thisBuild()), thisBuild().label(remote))
+		if confirmUpdate(fmt.Sprintf("replace it with this desktop's older %s?", version), false) {
+			return true, nil
+		}
+		ui.Note("keeping 2o %s on %s; update 2o on this desktop to match", remote, host)
+		return false, nil
+	case sameBuild:
+		ui.Warn("%s has another build of 2o %s", host, version)
+	default:
+		if remote.version == "" {
+			ui.Warn("older 2o detected on %s (this desktop has %s)", host, version)
+		} else {
+			ui.Warn("older 2o detected on %s: %s (this desktop has %s)", host, remote.label(thisBuild()), thisBuild().label(remote))
+		}
+	}
+	if confirmUpdate(fmt.Sprintf("update 2o on %s to %s?", host, version), true) {
+		return true, nil
+	}
+	ui.Note("keeping the current 2o on %s; some commands may be missing or behave differently", host)
+	return false, nil
 }
 
 // openTunnel holds a new session on the desktop daemon, forwards a server
