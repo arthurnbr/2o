@@ -1,6 +1,6 @@
 # Maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
 pkgname=2o-git
-pkgver=r6.574228c
+pkgver=0.1.0.r0.gf65d370
 pkgrel=1
 pkgdesc='Open files and URLs on your local desktop from a remote SSH shell'
 arch=('x86_64' 'aarch64')

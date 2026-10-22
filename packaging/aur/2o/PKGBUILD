@@ -10,7 +10,7 @@ depends=('openssh' 'xdg-utils')
 makedepends=('go' 'make')
 conflicts=('2o-git' '2o-bin')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('3ea718a0b8262ba323396fcf5e4dc640b6bb6ea60da524ce873f4720ae9ef039')
 # Static, stripped binaries: `2o ssh` uploads them to remote servers,
 # including servers whose CPU differs from this machine's.
 options=('!debug' '!strip')

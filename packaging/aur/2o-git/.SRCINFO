@@ -1,6 +1,6 @@
 pkgbase = 2o-git
 	pkgdesc = Open files and URLs on your local desktop from a remote SSH shell
-	pkgver = r6.574228c
+	pkgver = 0.1.0.r0.gf65d370
 	pkgrel = 1
 	url = https://github.com/arthurnbr/2o
 	arch = x86_64
@@ -13,6 +13,7 @@ pkgbase = 2o-git
 	depends = xdg-utils
 	provides = 2o
 	conflicts = 2o
+	conflicts = 2o-bin
 	options = !debug
 	options = !strip
 	source = 2o-git::git+https://github.com/arthurnbr/2o.git

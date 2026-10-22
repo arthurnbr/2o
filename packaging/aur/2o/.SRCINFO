@@ -1,0 +1,20 @@
+pkgbase = 2o
+	pkgdesc = Open files and URLs on your local desktop from a remote SSH shell
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/arthurnbr/2o
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = go
+	makedepends = make
+	depends = openssh
+	depends = xdg-utils
+	conflicts = 2o-git
+	conflicts = 2o-bin
+	options = !debug
+	options = !strip
+	source = 2o-0.1.0.tar.gz::https://github.com/arthurnbr/2o/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 3ea718a0b8262ba323396fcf5e4dc640b6bb6ea60da524ce873f4720ae9ef039
+
+pkgname = 2o
