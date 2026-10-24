@@ -1,27 +1,76 @@
-# 2o (to open)
+# 2o
 
-Work on a server over SSH, and open things on **your own desktop**: files and folders in their desktop application, URLs in your browser, the server's `localhost:3000` in your browser, text in your clipboard, a file in your desktop editor with the result saved back on the server, a notification when a build ends.
+**Work on a server over SSH, open things on your own desktop.**
 
-Everything travels inside the SSH connection you already use: no open ports, no SFTP, no public IP needed (works with Tailscale, ProxyJump, SSH aliases and custom ports through your normal `ssh` configuration). Desktop: Linux (macOS best effort). Server: Linux amd64 or arm64; nothing to install by hand, no sudo.
-
-## Quickstart
-
-On your **desktop** (where things should open), with 2o installed (see [Install](#install)):
+`2o` (*to open*) gives a remote shell a way back to the machine you are sitting at. Type `2o report.pdf` on the server and the PDF opens on your laptop; pipe a diff into `2o copy` and it lands in your desktop clipboard; `2o edit app.go` opens your desktop editor and saves the result back on the server.
 
 ```sh
-2o ssh HOST                 # instead of: ssh HOST — any ssh options work: 2o ssh -p 2222 user@HOST
+2o ssh myserver              # on your desktop, instead of: ssh myserver
 ```
 
-The first connection installs 2o on HOST (`~/.local/bin/2o`). Then, in that remote shell:
+```sh
+2o report.pdf                # on the server: opens on your desktop
+```
+
+## Features
+
+- **Open anything on the desktop.** Files and folders open in their desktop application, URLs in your browser, and `2o open http://localhost:3000` shows the server's dev server in your desktop browser.
+- **Edit remote files in your desktop editor.** `2o edit app.go:42` opens VS Code, Zed, Kate… at line 42. Saving writes the server file only if it did not change meanwhile, and your edits are never lost.
+- **Share one clipboard.** `git diff | 2o copy` on the server, paste on the desktop. `2o paste` goes the other way.
+- **Get notified.** `make; 2o notify build "done: $?"` pops a desktop notification when a long job ends.
+- **Tools just work.** `gh auth login`, `jupyter` and anything else that opens a browser open it on your desktop.
+- **Nothing to set up on the server.** The first `2o ssh` installs 2o in `~/.local/bin`, with no sudo. Both amd64 and arm64 servers work, whatever your desktop's CPU.
+- **Nothing to open on the network.** Everything travels inside the SSH connection you already use: no open port, no public IP. Your `~/.ssh/config`, ProxyJump, custom ports and Tailscale SSH all keep working.
+- **Updates itself.** Update 2o on your desktop; the next `2o ssh` offers to update the server copy.
+- **The desktop stays in charge.** Large transfers ask for confirmation, executables are refused, and every request is authenticated.
+
+## Quick install
+
+Install 2o on your **desktop** (the machine where things should open). Servers need nothing.
+
+**Arch Linux (AUR)**
+
+```sh
+yay -S 2o            # or 2o-bin (prebuilt), 2o-git (latest commit)
+```
+
+**macOS and Linux (Homebrew)**
+
+```sh
+brew tap arthurnbr/2o https://github.com/arthurnbr/2o
+brew install --cask 2o
+```
+
+**Debian, Ubuntu, Fedora, openSUSE**: download the `.deb` or `.rpm` for your CPU from the [latest release](https://github.com/arthurnbr/2o/releases/latest), then:
+
+```sh
+sudo apt install ./2o_*_amd64.deb         # Debian, Ubuntu
+sudo dnf install ./2o-*.x86_64.rpm        # Fedora, RHEL, openSUSE (zypper install)
+```
+
+**Anything else**: unpack `2o_VERSION_OS_ARCH.tar.gz` from the [latest release](https://github.com/arthurnbr/2o/releases/latest) and put its three binaries (`2o`, `2o-linux-amd64`, `2o-linux-arm64`) together in one directory on your `PATH`. More options, including building from source: [Install](#install).
+
+## Quick start
+
+```sh
+2o ssh HOST                 # on the desktop; any ssh option works: 2o ssh -p 2222 user@HOST
+```
+
+The first connection installs 2o on HOST. Then, in that remote shell:
 
 ```sh
 2o status                   # which desktop this shell reaches
 2o report.pdf               # open on the desktop (same as: 2o open report.pdf)
 2o edit app.go:42           # edit in the desktop editor, saved back on the server
 git diff | 2o copy          # to the desktop clipboard
+2o open http://localhost:8080   # the server's port 8080 in the desktop browser
 ```
 
-`2o ssh` must run on the machine whose desktop you want: that can be a host you reached through SSH if its graphical session is available, but files open **where `2o ssh` ran**, not at the start of an SSH chain. An SSH connection that is already open cannot be retrofitted.
+**Requirements.** Desktop: Linux with a graphical session (Wayland or X11), or macOS (best effort). Server: Linux, amd64 or arm64, with SSH TCP forwarding allowed (the default; not `AllowTcpForwarding no`).
+
+Files open **where `2o ssh` ran**. That can be a host you reached through SSH if its graphical session is available, but not the start of an SSH chain. An SSH connection that is already open cannot be retrofitted: reconnect with `2o ssh`.
+
+---
 
 ## Commands
 
@@ -138,9 +187,9 @@ Errors are one line, then what to do:
 
 Set `TWO_O_QUIET=1` (or `2o ssh -q`) to keep only warnings and errors; `NO_COLOR=1` disables colours.
 
-### Updates
+## Updates
 
-Install a new 2o on the **desktop** only; the next `2o ssh` brings everything else up to date and asks first:
+Update 2o on the **desktop** only, with your package manager or a new release; the next `2o ssh` brings everything else up to date and asks first:
 
 ```text
 $ 2o ssh myserver
@@ -158,22 +207,13 @@ $ 2o ssh myserver
 ```
 
 - **Enter** means yes. Answering **n** keeps the old copy for now (you are asked again next time).
-- **Open sessions keep working**: when the desktop daemon is restarted they reconnect to the new one on the same port, without restarting the old build.
+- **Open sessions keep working**: when the desktop daemon is restarted they reconnect to the new one on the same port.
 - A server with a **newer** 2o than the desktop is kept unless you agree to replace it (default **N**); update the desktop instead.
 - A server 2o speaking an **incompatible protocol** must be updated to continue (declining stops `2o ssh`, exit 2).
+- Releases compare by version, so the same release installed from two channels (say Homebrew on the desktop, a `.deb` on the server) is up to date. Builds from git compare by build time.
 - Without a terminal to ask (scripts, CI), the default applies and is reported; set `TWO_O_UPDATE=always` or `never` to decide in advance.
 
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | success |
-| 1 | the action failed (message on stderr) |
-| 2 | usage error: unknown command or option, wrong arguments, missing file, ssh modes 2o cannot wrap (`-N -f -W -O -Q -G -V -s -M -S`) |
-| 3 | no tunnel: no 2o session in this shell, or the desktop is unreachable |
-| 4 | refused by the desktop: size limit, free space, declined or unanswered confirmation |
-| N | `2o ssh HOST command`: the remote command's own exit code (never re-run) |
-| 255 | `2o ssh`: ssh itself failed (as with ssh) |
+`.deb`, `.rpm` and tarball installs are not tied to a repository: update them by installing the newer release file.
 
 ## Settings
 
@@ -195,19 +235,31 @@ Transfer limits are decided by **the desktop**; the server only announces sizes,
 
 Sizes accept `k`, `M`, `G`, `T` suffixes. Whatever the settings, a transfer that would leave less than 1 GiB free on the desktop disk is refused. The desktop daemon logs to `~/.cache/2o/daemon.log`.
 
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | the action failed (message on stderr) |
+| 2 | usage error: unknown command or option, wrong arguments, missing file, ssh modes 2o cannot wrap (`-N -f -W -O -Q -G -V -s -M -S`) |
+| 3 | no tunnel: no 2o session in this shell, or the desktop is unreachable |
+| 4 | refused by the desktop: size limit, free space, declined or unanswered confirmation |
+| N | `2o ssh HOST command`: the remote command's own exit code (never re-run) |
+| 255 | `2o ssh`: ssh itself failed (as with ssh) |
+
 ## Install
 
-2o is one static binary. Install it on the **desktop**; `2o ssh` installs the server copy itself. It uploads its own binary when the server has the same CPU; for a server with another CPU it uploads the matching prebuilt `2o-linux-amd64` or `2o-linux-arm64`, looked up next to the `2o` binary, in `../lib/2o/`, then in `~/.cache/2o/bin/`. Every package below ships both. Run from inside the source checkout with Go installed, `2o ssh` builds a missing one once into that cache.
+2o is one static binary. Install it on the **desktop**; `2o ssh` installs the server copy itself. It uploads its own binary when the server has the same CPU; for a server with another CPU it uploads the matching `2o-linux-amd64` or `2o-linux-arm64`, looked up next to the `2o` binary, in `../lib/2o/`, then in `~/.cache/2o/bin/`. Every package ships both.
 
-| Desktop | Install |
-|---|---|
-| Arch Linux (AUR) | `yay -S 2o` (built from the release), `2o-bin` (prebuilt), or `2o-git` (latest commit) |
-| macOS, Linux (Homebrew) | `brew tap arthurnbr/2o https://github.com/arthurnbr/2o && brew install --cask 2o` |
-| Debian, Ubuntu | `sudo apt install ./2o_X.Y.Z_amd64.deb` from the [latest release](https://github.com/arthurnbr/2o/releases/latest) |
-| Fedora, RHEL, openSUSE | `sudo dnf install ./2o-X.Y.Z-1.x86_64.rpm` from the latest release |
-| Anything else | unpack `2o_X.Y.Z_OS_ARCH.tar.gz` from the latest release and keep its three binaries together in one directory on your `PATH` |
+| Desktop | Package | Installs |
+|---|---|---|
+| Arch Linux | AUR `2o` (built from the release), `2o-bin` (prebuilt), `2o-git` (latest commit) | `/usr/bin/2o`, `/usr/lib/2o/` |
+| macOS, Linux | Homebrew cask `2o` from the `arthurnbr/2o` tap (see [Quick install](#quick-install)) | `$(brew --prefix)/bin/2o` |
+| Debian, Ubuntu | `2o_VERSION_{amd64,arm64}.deb` from the [releases](https://github.com/arthurnbr/2o/releases) | `/usr/bin/2o`, `/usr/lib/2o/` |
+| Fedora, RHEL, openSUSE | `2o-VERSION-1.{x86_64,aarch64}.rpm` from the releases | `/usr/bin/2o`, `/usr/lib/2o/` |
+| Any | `2o_VERSION_{linux,darwin}_{amd64,arm64}.tar.gz` from the releases | wherever you unpack it |
 
-Updating the package is all there is to do: the next `2o ssh` offers to restart the desktop daemon and to update each server (see [Updates](#updates)). Two releases compare by version, so the same release installed from different channels is never offered as an update.
+Every release also has a `SHA256SUMS` file.
 
 From source (Go 1.25+):
 
@@ -217,13 +269,7 @@ make install                 # ~/.local/bin/2o + ~/.local/lib/2o/2o-linux-{amd64
 # or: sudo make PREFIX=/usr/local install
 ```
 
-`make` alone builds `build/2o` (this machine) and `build/2o-linux-amd64`, `build/2o-linux-arm64` (servers); `make dist` builds every release asset into `dist/`. Make sure `~/.local/bin` is on your `PATH`. The PKGBUILDs are in [`packaging/aur/`](packaging/aur/), the Homebrew cask in [`Casks/2o.rb`](Casks/2o.rb).
-
-### Releasing
-
-1. `git tag vX.Y.Z && git push origin vX.Y.Z`: CI tests, runs `make dist` and publishes the GitHub release.
-2. `packaging/release.sh X.Y.Z`: sets the version and release checksums in `packaging/aur/{2o,2o-bin}/PKGBUILD` and `Casks/2o.rb`, regenerates `.SRCINFO`; commit and push (the cask is served from this repository).
-3. `packaging/aur/publish.sh`: pushes `2o`, `2o-bin` and `2o-git` to the AUR (needs an AUR account with your SSH key).
+`make` alone builds `build/2o` (this machine) and `build/2o-linux-amd64`, `build/2o-linux-arm64` (servers). Make sure `~/.local/bin` is on your `PATH`. Run from inside the source checkout with Go installed, `2o ssh` also builds a missing server binary once into `~/.cache/2o/bin/`.
 
 ## How it works, and what to trust
 
@@ -237,3 +283,13 @@ The forward is TCP rather than a Unix socket because Tailscale SSH creates forwa
 - Servers with `AllowTcpForwarding no` cannot use 2o.
 
 See [PLAN.md](PLAN.md) for architecture and design decisions.
+
+## Releasing (maintainers)
+
+1. `git tag vX.Y.Z && git push origin vX.Y.Z`: CI tests, runs `make dist` (tarballs, `.deb`, `.rpm`, `SHA256SUMS`) and publishes the GitHub release.
+2. `packaging/release.sh X.Y.Z`: sets the version and release checksums in `packaging/aur/{2o,2o-bin}/PKGBUILD` and `Casks/2o.rb`, regenerates `.SRCINFO`; commit and push (the cask is served from this repository).
+3. `packaging/aur/publish.sh`: pushes `2o`, `2o-bin` and `2o-git` to the AUR.
+
+## License
+
+[MIT](LICENSE)
