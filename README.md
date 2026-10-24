@@ -28,12 +28,6 @@
 
 Install 2o on your **desktop** (the machine where things should open). Servers need nothing.
 
-**Arch Linux (AUR)**
-
-```sh
-yay -S 2o            # or 2o-bin (prebuilt), 2o-git (latest commit)
-```
-
 **macOS and Linux (Homebrew)**
 
 ```sh
@@ -253,7 +247,7 @@ Sizes accept `k`, `M`, `G`, `T` suffixes. Whatever the settings, a transfer that
 
 | Desktop | Package | Installs |
 |---|---|---|
-| Arch Linux | AUR `2o` (built from the release), `2o-bin` (prebuilt), `2o-git` (latest commit) | `/usr/bin/2o`, `/usr/lib/2o/` |
+| Arch Linux | `PKGBUILD` in this repository: `cd packaging/aur/2o && makepkg -si` (or `2o-bin`, prebuilt) | `/usr/bin/2o`, `/usr/lib/2o/` |
 | macOS, Linux | Homebrew cask `2o` from the `arthurnbr/2o` tap (see [Quick install](#quick-install)) | `$(brew --prefix)/bin/2o` |
 | Debian, Ubuntu | `2o_VERSION_{amd64,arm64}.deb` from the [releases](https://github.com/arthurnbr/2o/releases) | `/usr/bin/2o`, `/usr/lib/2o/` |
 | Fedora, RHEL, openSUSE | `2o-VERSION-1.{x86_64,aarch64}.rpm` from the releases | `/usr/bin/2o`, `/usr/lib/2o/` |
@@ -288,7 +282,6 @@ See [PLAN.md](PLAN.md) for architecture and design decisions.
 
 1. `git tag vX.Y.Z && git push origin vX.Y.Z`: CI tests, runs `make dist` (tarballs, `.deb`, `.rpm`, `SHA256SUMS`) and publishes the GitHub release.
 2. `packaging/release.sh X.Y.Z`: sets the version and release checksums in `packaging/aur/{2o,2o-bin}/PKGBUILD` and `Casks/2o.rb`, regenerates `.SRCINFO`; commit and push (the cask is served from this repository).
-3. `packaging/aur/publish.sh`: pushes `2o`, `2o-bin` and `2o-git` to the AUR.
 
 ## License
 
