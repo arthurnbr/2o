@@ -64,6 +64,8 @@ git diff | 2o copy          # to the desktop clipboard
 
 Files open **where `2o ssh` ran**. That can be a host you reached through SSH if its graphical session is available, but not the start of an SSH chain. An SSH connection that is already open cannot be retrofitted: reconnect with `2o ssh`.
 
+**tmux, herdr, zellij…** Panes of a multiplexer started before your `2o ssh` connection (or that outlived it) work too: a shell without a session of its own uses the latest live `2o ssh` connection, as long as all live connections come from the same desktop. With connections from several desktops, 2o lists them and you pick one with `export TWO_O_SESSION=…`.
+
 ---
 
 ## Commands
@@ -223,7 +225,7 @@ Transfer limits are decided by **the desktop**; the server only announces sizes,
 | `TWO_O_QUIET` | both | unset | `1`: only warnings and errors on stderr. |
 | `TWO_O_UPDATE` | desktop | `ask` | When `2o ssh` finds an older desktop daemon or another 2o on the server: `ask` ([Y/n] on the terminal), `always`, or `never`. |
 | `NO_COLOR` | both | unset | No colours. |
-| `TWO_O_SESSION` | server | set by `2o ssh` | The session file this shell uses. In a reattached tmux whose session is gone, 2o only moves to another live session of the **same** desktop; otherwise it lists them so you pick one with `export TWO_O_SESSION=…`. |
+| `TWO_O_SESSION` | server | set by `2o ssh` | The session file this shell uses. A shell without one (multiplexer pane), or whose session is gone, uses the latest live session if all live sessions come from the same desktop (its own desktop, when known); otherwise 2o lists them so you pick one with `export TWO_O_SESSION=…`. |
 | `TWO_O_DESKTOP` | server | set by `2o ssh` | Label (`user@host`) of the desktop of this shell, for messages. |
 | `BROWSER` | server | set by `2o ssh` | Makes tools open URLs through 2o. |
 

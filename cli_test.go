@@ -183,6 +183,7 @@ func TestStatusShowsDesktopVersionAndAge(t *testing.T) {
 }
 
 func TestStatusWithoutTunnelExitsNoTunnel(t *testing.T) {
+	globRoot(t) // never reach the real sessions of the machine running the tests
 	t.Setenv("TWO_O_SESSION", "")
 	if _, _, code := runCLI(t, "status"); code != exitNoTunnel {
 		t.Fatalf("exit %d", code)

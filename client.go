@@ -68,6 +68,9 @@ func remote() bool { return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("TWO_
 
 // targetDesktop names the desktop this shell's requests go to, for messages.
 func targetDesktop() string {
+	if s, ok := routeSession(); ok && s.desktop != "" {
+		return s.desktop
+	}
 	if s, _ := currentSession(); s.desktop != "" {
 		return s.desktop
 	}

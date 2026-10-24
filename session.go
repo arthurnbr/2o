@@ -355,9 +355,12 @@ func dialSession(s session, m wire.Message) (net.Conn, error) {
 	return c, nil
 }
 
-// request sends m to this shell's desktop. If its session is gone (e.g. a
-// reattached tmux kept an old TWO_O_SESSION) it moves on only to the single
-// live session of the same desktop; anything else is the user's choice.
+// request sends m to this shell's desktop. A shell started by `2o ssh` has
+// its own session ($TWO_O_SESSION). Shells of a terminal multiplexer (tmux,
+// herdr, zellij…) started before it have none, or keep one whose connection
+// ended: they use the newest live session when every live session leads to
+// the same desktop (the one of their old session, when known). Anything
+// else is the user's choice.
 func request(m wire.Message) (net.Conn, error) {
 	cur, err := currentSession()
 	if err == nil {
@@ -373,19 +376,53 @@ func request(m wire.Message) (net.Conn, error) {
 	} else if errors.Is(err, errUnsafeFile) {
 		return nil, err
 	}
-	live := liveSessions(cur.path)
-	if len(live) == 1 && cur.desktop != "" && live[0].desktop == cur.desktop {
-		c, e := dialSession(live[0], m)
-		if e == nil {
-			return c, nil
-		}
-		var ue *userError
-		if errors.As(e, &ue) {
-			return nil, e
-		}
-		return nil, reconnectHint(fail("desktop tunnel unavailable").because(e))
+	s, live, ok := fallbackSession(cur)
+	if !ok {
+		return nil, routeError(cur, live, err)
 	}
-	return nil, routeError(cur, live, err)
+	c, e := dialSession(s, m)
+	if e == nil {
+		return c, nil
+	}
+	var ue *userError
+	if errors.As(e, &ue) {
+		return nil, e
+	}
+	return nil, reconnectHint(fail("desktop tunnel unavailable").because(e))
+}
+
+// fallbackSession picks the session for a shell whose own is missing or
+// gone: the newest live one, if all live sessions belong to one desktop and,
+// when cur names a desktop, to that one. It also returns the live sessions.
+func fallbackSession(cur session) (session, []session, bool) {
+	live := liveSessions(cur.path)
+	if len(live) == 0 {
+		return session{}, live, false
+	}
+	desktop := live[0].desktop
+	if desktop == "" || cur.desktop != "" && cur.desktop != desktop {
+		return session{}, live, false
+	}
+	for _, s := range live[1:] {
+		if s.desktop != desktop {
+			return session{}, live, false
+		}
+	}
+	return live[0], live, true
+}
+
+// routeSession is the session request would use, for messages: this shell's
+// own, else the fallback. It reports false when request would fail to route.
+func routeSession() (session, bool) {
+	cur, err := currentSession()
+	if err == nil {
+		return cur, true
+	}
+	if errors.Is(err, errUnsafeFile) {
+		return cur, false
+	}
+	s, _, ok := fallbackSession(cur)
+	return s, ok
 }
 
 // routeError explains why no session was used and how to pick one.

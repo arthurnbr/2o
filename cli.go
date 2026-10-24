@@ -463,8 +463,8 @@ func status() error {
 	}
 	ui.Success("connected to %s", ui.Bold(where))
 	rows := [][2]string{{"desktop", where}, {"version", versionLine(m.Version)}}
-	if s, err := currentSession(); err == nil {
-		rows = append(rows, [2]string{"session", fmt.Sprintf("%s old (%s)", ago(time.Since(modTime(s.path))), s.path)})
+	if s, ok := routeSession(); ok {
+		rows = append(rows, [2]string{"session", sessionLine(s)})
 	}
 	if !ui.Quiet() {
 		ui.Table(rows)
@@ -474,6 +474,16 @@ func status() error {
 		ui.Hint("reconnect with 2o ssh from the desktop to update the server copy")
 	}
 	return nil
+}
+
+// sessionLine describes s for status and doctor, saying when this shell
+// borrows the session of another `2o ssh` connection.
+func sessionLine(s session) string {
+	line := fmt.Sprintf("%s old (%s)", ago(time.Since(modTime(s.path))), s.path)
+	if s.path != os.Getenv("TWO_O_SESSION") {
+		line += ", latest 2o ssh connection"
+	}
+	return line
 }
 
 func versionLine(remote string) string {
@@ -517,12 +527,13 @@ func doctor() error {
 		}
 		return doctorResult(problems)
 	}
-	s, err := currentSession()
-	if err != nil {
+	s, ok := routeSession()
+	if !ok {
+		_, err := request(wire.Message{Op: "ping"})
 		check(false, "session", errorLine(err))
 		return doctorResult(problems)
 	}
-	check(true, "session", fmt.Sprintf("%s, %s old", s.path, ago(time.Since(modTime(s.path)))))
+	check(true, "session", sessionLine(s))
 	c, err := request(wire.Message{Op: "doctor"})
 	if err != nil {
 		check(false, "tunnel", errorLine(err))

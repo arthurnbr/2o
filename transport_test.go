@@ -537,6 +537,33 @@ func TestStaleSessionRouting(t *testing.T) {
 	}
 }
 
+// A shell with no session of its own (a multiplexer pane opened before
+// `2o ssh`) uses the live sessions when they all lead to one desktop, and
+// asks when they lead to several.
+func TestShellWithoutSessionUsesTheOnlyDesktop(t *testing.T) {
+	d := startDesktop(t)
+	root := globRoot(t)
+	t.Setenv("TWO_O_SESSION", "")
+	t.Setenv("TWO_O_DESKTOP", "")
+	holdTestSession(t, d.sock, sessionDir(root, "a"), "me@laptop")
+	holdTestSession(t, d.sock, sessionDir(root, "b"), "me@laptop")
+	c, err := request(wire.Message{Op: "ping"})
+	if err != nil {
+		t.Fatalf("one desktop, two sessions: %v", err)
+	}
+	c.Close()
+	if got := targetDesktop(); got != "me@laptop" {
+		t.Fatalf("target desktop %q", got)
+	}
+
+	holdTestSession(t, d.sock, sessionDir(root, "c"), "you@desk")
+	_, err = request(wire.Message{Op: "ping"})
+	var ue *userError
+	if !errors.As(err, &ue) || ue.code != exitNoTunnel || !strings.Contains(strings.Join(ue.hints, "\n"), "you@desk") {
+		t.Fatalf("two desktops must be the user's choice: %v", err)
+	}
+}
+
 func TestNoSessionIsAUserError(t *testing.T) {
 	globRoot(t)
 	t.Setenv("TWO_O_SESSION", "")
