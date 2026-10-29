@@ -21,6 +21,7 @@ func Doctor() []CheckResult {
 		clipboardCheck(s),
 		notifyCheck(),
 		editorCheck(),
+		pickerCheck(),
 	}
 }
 

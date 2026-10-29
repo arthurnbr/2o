@@ -50,6 +50,13 @@ var commands = []command{
 		details: "Runs ssh with your usual options. The remote shell (or command) gets 2o on its PATH and a\n" +
 			"private tunnel to this desktop; it closes with the session. The first connection installs 2o\n" +
 			"in ~/.local/bin on HOST. Exit status is the remote command's, or 255 when ssh fails."},
+	{name: "tunnel", args: "[-d|--stop] [ssh opts] HOST", summary: "keep a tunnel to HOST open, reconnecting",
+		details: "Opens the same tunnel as 2o ssh, without a shell, and reconnects whenever it drops. Shells\n" +
+			"on HOST without a 2o ssh session of their own (herdr, tmux panes, plain ssh logins) use it.\n" +
+			"  -d, --detach   run in the background; returns once connected (log in ~/.cache/2o/)\n" +
+			"                 ssh cannot prompt there: use ssh-agent or a key without passphrase\n" +
+			"  --stop         stop the tunnel to HOST started with -d\n" +
+			"Only one tunnel per HOST runs at a time. Stop a foreground one with Ctrl-C."},
 	{name: "open", args: "FILE|DIR|URL", summary: "open on the desktop (2o FILE works too)",
 		details: "URLs open in the desktop browser; http://localhost:PORT is bridged so the desktop browser\n" +
 			"reaches the server's port until Ctrl-C. Files and folders are copied to the desktop cache\n" +
@@ -60,6 +67,15 @@ var commands = []command{
 			"Whenever the result cannot be written back, the desktop keeps your edits and 2o prints where.\n" +
 			"  -n, --new   create FILE if it does not exist\n" +
 			"  FILE:LINE   open at LINE (code, codium, zed, subl, kate, gvim, gedit, emacs)"},
+	{name: "download", args: "FILE|DIR…", summary: "save in the desktop's Downloads folder",
+		details: "Copies files and folders into the desktop's download folder without opening them; a name\n" +
+			"already taken there gets \" (1)\", \" (2)\"… Large transfers ask on the desktop first.\n" +
+			"The folder is TWO_O_DOWNLOAD_DIR on the desktop, else its XDG Downloads (~/Downloads)."},
+	{name: "upload", args: "[-d]", summary: "pick files on the desktop, save them here in Downloads",
+		details: "Opens a file picker on the desktop; what you pick there is saved in this machine's\n" +
+			"download folder (TWO_O_DOWNLOAD_DIR here, else XDG Downloads, else ~/Downloads).\n" +
+			"Nothing leaves the desktop unless you pick it there.\n" +
+			"  -d, --dirs   pick folders instead of files"},
 	{name: "copy", args: "< DATA", summary: "put stdin on the desktop clipboard",
 		details: "Reads stdin, e.g. `git diff | 2o copy`. Without a tunnel, falls back to the terminal\n" +
 			"clipboard (OSC 52) when stdout is a terminal. Silent on success."},
@@ -73,7 +89,7 @@ var commands = []command{
 			"  -v, --verbose   same as 2o doctor"},
 	{name: "doctor", summary: "check the tunnel and the desktop's tools",
 		details: "Checks this shell's session, the tunnel, versions, and on the desktop: graphical session,\n" +
-			"opener, clipboard, notifications, editor, transfer policy and log. Changes nothing."},
+			"opener, clipboard, notifications, editor, file picker, transfer policy and log. Changes nothing."},
 	// Internal: started by 2o ssh, not shown in help.
 	{name: "daemon", summary: "run the desktop daemon (2o ssh starts it)", hidden: true},
 	{name: "shell", summary: "start a login shell (used by 2o ssh)", hidden: true},
@@ -125,8 +141,10 @@ func usage(w io.Writer) {
 	fmt.Fprintf(w, "\n%s\n", p(hBold, "Examples"))
 	for _, e := range [][2]string{
 		{"2o ssh myserver", "on the desktop: log in with a tunnel"},
+		{"2o tunnel -d myserver", "on the desktop: keep a tunnel up in the background"},
 		{"2o report.pdf", "on the server: open it on the desktop"},
 		{"2o edit app.go:42", "edit at line 42 in the desktop editor"},
+		{"2o download big.tar.gz", "save it in the desktop's Downloads"},
 		{"git diff | 2o copy", "copy to the desktop clipboard"},
 		{"2o open http://localhost:3000", "see a server dev site in the desktop browser"},
 	} {
@@ -266,6 +284,8 @@ func run(args []string) error {
 		return daemon()
 	case "ssh":
 		return sshSession(rest)
+	case "tunnel":
+		return tunnelCommand(rest)
 	case "shell":
 		if len(rest) != 0 {
 			return usageError(name, "2o shell takes no arguments")
@@ -280,6 +300,20 @@ func run(args []string) error {
 			return usageError(name, "2o open takes exactly one FILE, DIR or URL")
 		}
 		return open(rest[0])
+	case "download":
+		if len(rest) == 0 {
+			return usageError(name, "2o download needs at least one FILE or DIR")
+		}
+		return download(rest)
+	case "upload":
+		dirs := false
+		for _, a := range rest {
+			if a != "-d" && a != "--dirs" {
+				return usageError(name, "unknown option %q for 2o upload", a)
+			}
+			dirs = true
+		}
+		return upload(dirs)
 	case "copy":
 		if len(rest) != 0 {
 			return usageError(name, "2o copy takes no arguments; it reads stdin")

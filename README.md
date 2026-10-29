@@ -16,6 +16,7 @@
 
 - **Open anything on the desktop.** Files and folders open in their desktop application, URLs in your browser, and `2o open http://localhost:3000` shows the server's dev server in your desktop browser.
 - **Edit remote files in your desktop editor.** `2o edit app.go:42` opens VS Code, Zed, Kate… at line 42. Saving writes the server file only if it did not change meanwhile, and your edits are never lost.
+- **Move files both ways.** `2o download big.tar.gz` saves it in the desktop's Downloads; `2o upload` opens a file picker on the desktop and saves what you pick in the server's Downloads.
 - **Share one clipboard.** `git diff | 2o copy` on the server, paste on the desktop. `2o paste` goes the other way.
 - **Get notified.** `make; 2o notify build "done: $?"` pops a desktop notification when a long job ends.
 - **Tools just work.** `gh auth login`, `jupyter` and anything else that opens a browser open it on your desktop.
@@ -66,14 +67,19 @@ Files open **where `2o ssh` ran**. That can be a host you reached through SSH if
 
 **tmux, herdr, zellij…** Panes of a multiplexer started before your `2o ssh` connection (or that outlived it) work too: a shell without a session of its own uses the latest live `2o ssh` connection, as long as all live connections come from the same desktop. With connections from several desktops, 2o lists them and you pick one with `export TWO_O_SESSION=…`.
 
+**No terminal to keep open.** `2o tunnel -d HOST` keeps a tunnel to HOST open in the background, without a shell, and reconnects whenever it drops (network change, sleep, server reboot). Shells on HOST without a session of their own use it, like multiplexer panes, so `herdr --remote HOST` or a plain `ssh HOST` reach the desktop. Stop it with `2o tunnel --stop HOST`. In the background ssh cannot prompt: use ssh-agent or a key without passphrase, and a known host key.
+
 ---
 
 ## Commands
 
 ```text
 2o ssh [ssh options] HOST [command…]   connect to HOST with a tunnel back to this desktop
+2o tunnel [-d|--stop] [ssh opts] HOST   keep a tunnel to HOST open, reconnecting
 2o open FILE|DIR|URL                    open on the desktop (2o FILE works too)
 2o edit [-n] FILE[:LINE]                edit in the desktop's editor, saved back here
+2o download FILE|DIR…                   save in the desktop's Downloads folder
+2o upload [-d]                          pick files on the desktop, save them here in Downloads
 2o copy < DATA                          put stdin on the desktop clipboard
 2o paste [-c]                           print the desktop clipboard
 2o notify TITLE BODY                    show a desktop notification
@@ -117,6 +123,20 @@ When you close the editor, the server file is replaced atomically (mode kept) **
 ```
 
 Recovery copies (`~/.cache/2o/edit-*`) are never cleaned automatically.
+
+### download, upload
+
+```sh
+2o download report.pdf logs/          # server → the desktop's Downloads, not opened
+2o upload                             # file picker on the desktop → this server's Downloads
+2o upload -d                          # pick folders instead
+```
+
+Nothing is overwritten: a name already taken gets ` (1)`, ` (2)`… before the extension. Downloads are saved, never opened, so scripts and binaries go through, but nothing arrives executable. Large downloads ask on the desktop like any transfer (`TWO_O_CONFIRM_BYTES`).
+
+`2o upload` never takes a desktop path from the server: only what you pick in the desktop's picker (zenity or kdialog on Linux, the Finder on macOS) is sent. Closing the picker sends nothing (exit 0); nobody picking within 5 minutes is exit 4.
+
+Each side saves in **its own** download folder: `TWO_O_DOWNLOAD_DIR` if set (absolute path, `~/` expanded), else the XDG download folder (`xdg-user-dir DOWNLOAD`), else `~/Downloads`. Set it on the desktop for `download`, on the server for `upload`.
 
 ### copy, paste
 
@@ -218,6 +238,7 @@ Transfer limits are decided by **the desktop**; the server only announces sizes,
 | Variable | Where | Default | Effect |
 |---|---|---|---|
 | `TWO_O_EDITOR` | desktop | detected | Blocking graphical editor for `2o edit`, e.g. `code --wait`. |
+| `TWO_O_DOWNLOAD_DIR` | both | XDG Downloads | Where `2o download` saves on the desktop and `2o upload` saves on the server. |
 | `TWO_O_CONFIRM_BYTES` | desktop | `1G` | Above this, a notification with **Accept / Refuse** asks before receiving. No answer in 2 minutes = refused ("nobody answered"); no notification daemon = refused. `0` = never ask. |
 | `TWO_O_MAX_BYTES` | desktop | `0` (none) | Hard cap on what is being received at once; larger transfers are refused without asking. |
 | `TWO_O_CLIPBOARD_BYTES` | desktop | `16M` | Clipboard size for `copy`/`paste` (held in memory). |

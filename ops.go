@@ -51,6 +51,10 @@ func serve(c net.Conn, m wire.Message) {
 		serveNotify(c, m)
 	case "edit":
 		serveEdit(c, m)
+	case "download":
+		serveDownload(c, m)
+	case "upload":
+		serveUpload(c, m)
 	case "proxy":
 		serveProxy(c, m)
 	case "proxy-stream":
@@ -163,6 +167,78 @@ func serveOpenFile(c net.Conn, m wire.Message) {
 		return
 	}
 	ok(c)
+}
+
+// serveDownload saves a file or folder from the server in the desktop's
+// download directory, under a free name, without opening it. The usual
+// policy applies (size cap, free space, confirmation of large transfers).
+func serveDownload(c net.Conn, m wire.Message) {
+	dir, err := desktop.DownloadDir()
+	if err != nil {
+		replyErr(c, fail("the desktop cannot use its download directory: %v", err).because(err).
+			hint("set TWO_O_DOWNLOAD_DIR on the desktop to an absolute path"))
+		return
+	}
+	release, err := admitTransfer(m.Name, m.Size, dir, waiting(c))
+	if err != nil {
+		replyErr(c, err)
+		return
+	}
+	defer release()
+	if err = wire.Write(c, wire.Message{Op: "accept", Desktop: desktopLabel()}); err != nil {
+		return
+	}
+	path, err := files.ReceiveDownload(m.Name, os.FileMode(m.Mode), m.Size, c, dir)
+	if err != nil {
+		replyErr(c, fail("the desktop could not save %s", displayName(m.Name)).because(err).hint("%v", err))
+		return
+	}
+	_ = wire.Write(c, wire.Message{Path: path, Desktop: desktopLabel()})
+}
+
+// pickFiles shows the desktop file picker; replaced in tests.
+var pickFiles = desktop.Pick
+
+// serveUpload shows a file picker and sends what the desktop user chose.
+// Only what the user picks leaves the desktop: the server cannot name a
+// path. Protocol: desktop → {Op: file, Name, Mode, Size} + Size bytes, per
+// pick, then {Op: done}. A failure before a file's header is a replyErr
+// message; once its bytes flow, the connection is just closed (the server
+// then sees a truncated transfer and discards it).
+func serveUpload(c net.Conn, m wire.Message) {
+	dirs := os.FileMode(m.Mode).IsDir()
+	title := "2o: send files to the SSH server"
+	if dirs {
+		title = "2o: send folders to the SSH server"
+	}
+	picked, err := pickFiles(title, dirs)
+	switch {
+	case errors.Is(err, desktop.ErrCancelled):
+		_ = wire.Write(c, wire.Message{Op: "done", Desktop: desktopLabel()})
+		return
+	case errors.Is(err, desktop.ErrTimeout):
+		replyErr(c, fail("nobody picked a file on %s in time", desktopLabel()).because(err).exit(exitRefused))
+		return
+	case err != nil:
+		replyErr(c, desktopFailure("could not show a file picker", err))
+		return
+	}
+	for _, p := range picked {
+		name, mode, size, r, err := files.PrepareDownload(p)
+		if err != nil {
+			replyErr(c, fail("the desktop cannot send %s", p).because(err).hint("%v", err))
+			return
+		}
+		err = wire.Write(c, wire.Message{Op: "file", Name: name, Mode: uint32(mode), Size: size, Desktop: desktopLabel()})
+		if err == nil {
+			_, err = io.CopyN(c, r, size)
+		}
+		r.Close()
+		if err != nil {
+			return
+		}
+	}
+	_ = wire.Write(c, wire.Message{Op: "done", Desktop: desktopLabel()})
 }
 
 // waiting returns admitTransfer's hook telling the remote that the desktop

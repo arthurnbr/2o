@@ -58,18 +58,36 @@ type entry struct {
 	info os.FileInfo
 }
 
-// Prepare opens a regular file or produces a tar stream of a directory. The
-// returned size is exact, including tar headers and padding. Close reader even
-// when a transfer is interrupted, to stop the tar-producing goroutine.
+// Prepare opens a regular file or produces a tar stream of a directory, for
+// a transfer the desktop opens: executables and scripts are refused. The
+// returned size is exact, including tar headers and padding. Close reader
+// even when a transfer is interrupted, to stop the tar-producing goroutine.
 func Prepare(p string) (name string, mode os.FileMode, size int64, reader io.ReadCloser, err error) {
-	info, err := os.Lstat(p)
+	return prepare(p, true)
+}
+
+// PrepareDownload is Prepare for a file saved, never opened, on the other
+// end: any regular file or directory goes, and a symlink given as p is
+// followed (links inside a directory are still refused).
+func PrepareDownload(p string) (name string, mode os.FileMode, size int64, reader io.ReadCloser, err error) {
+	return prepare(p, false)
+}
+
+func prepare(p string, strict bool) (name string, mode os.FileMode, size int64, reader io.ReadCloser, err error) {
+	stat := os.Lstat
+	if !strict {
+		stat = os.Stat
+	}
+	info, err := stat(p)
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
 	name = safeName(filepath.Base(filepath.Clean(p)))
 	if info.Mode().IsRegular() {
-		if err = safeFile(info.Mode(), info.Name()); err != nil {
-			return "", 0, 0, nil, err
+		if strict {
+			if err = safeFile(info.Mode(), info.Name()); err != nil {
+				return "", 0, 0, nil, err
+			}
 		}
 		if info.Size() > MaxBytes {
 			return "", 0, 0, nil, fmt.Errorf("file is %s, above the %s transfer limit", HumanSize(info.Size()), HumanSize(MaxBytes))
@@ -78,25 +96,33 @@ func Prepare(p string) (name string, mode os.FileMode, size int64, reader io.Rea
 		if openErr != nil {
 			return "", 0, 0, nil, openErr
 		}
-		if err = checkPrefix(f); err != nil {
-			f.Close()
-			return "", 0, 0, nil, err
+		if strict {
+			if err = checkPrefix(f); err != nil {
+				f.Close()
+				return "", 0, 0, nil, err
+			}
 		}
 		return name, info.Mode(), info.Size(), f, nil
 	}
 	if !info.IsDir() {
 		return "", 0, 0, nil, fmt.Errorf("unsafe file type: %s", p)
 	}
-	entries, size, err := scanDirectory(p, info)
+	if !strict {
+		// The archive walks the directory itself, never through a link.
+		if p, err = filepath.EvalSymlinks(p); err != nil {
+			return "", 0, 0, nil, err
+		}
+	}
+	entries, size, err := scanDirectory(p, info, strict)
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
 	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(writeArchive(pw, p, info, entries)) }()
+	go func() { pw.CloseWithError(writeArchive(pw, p, info, entries, strict)) }()
 	return name, info.Mode(), size, pr, nil
 }
 
-func scanDirectory(root string, original os.FileInfo) ([]entry, int64, error) {
+func scanDirectory(root string, original os.FileInfo, strict bool) ([]entry, int64, error) {
 	var entries []entry
 	var count countingWriter
 	tw := tar.NewWriter(&count)
@@ -131,23 +157,25 @@ func scanDirectory(root string, original os.FileInfo) ([]entry, int64, error) {
 			return err
 		}
 		if info.Mode().IsRegular() {
-			if err = safeFile(info.Mode(), info.Name()); err != nil {
-				return err
-			}
 			if info.Size() > MaxBytes {
 				return fmt.Errorf("%s is %s, above the %s transfer limit", p, HumanSize(info.Size()), HumanSize(MaxBytes))
 			}
-			f, err := openChecked(p, info)
-			if err != nil {
-				return err
-			}
-			err = checkPrefix(f)
-			closeErr := f.Close()
-			if err != nil {
-				return err
-			}
-			if closeErr != nil {
-				return closeErr
+			if strict {
+				if err = safeFile(info.Mode(), info.Name()); err != nil {
+					return err
+				}
+				f, err := openChecked(p, info)
+				if err != nil {
+					return err
+				}
+				err = checkPrefix(f)
+				closeErr := f.Close()
+				if err != nil {
+					return err
+				}
+				if closeErr != nil {
+					return closeErr
+				}
 			}
 		}
 		h := archiveHeader(rel, info.Mode(), info.Size())
@@ -194,7 +222,7 @@ func archiveHeader(name string, mode os.FileMode, size int64) tar.Header {
 	return h
 }
 
-func writeArchive(dst io.Writer, path string, expected os.FileInfo, entries []entry) error {
+func writeArchive(dst io.Writer, path string, expected os.FileInfo, entries []entry, strict bool) error {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		return err
@@ -229,7 +257,7 @@ func writeArchive(dst io.Writer, path string, expected os.FileInfo, entries []en
 			if statErr == nil && (!opened.Mode().IsRegular() || !os.SameFile(e.info, opened) || opened.Size() != e.info.Size()) {
 				statErr = fmt.Errorf("file changed during transfer: %s", e.name)
 			}
-			if statErr == nil {
+			if statErr == nil && strict {
 				statErr = checkPrefix(f)
 			}
 			if statErr == nil {
@@ -247,26 +275,18 @@ func writeArchive(dst io.Writer, path string, expected os.FileInfo, entries []en
 	return tw.Close()
 }
 
-// Receive stores exactly size bytes under a private directory within base.
-// The returned path is the safe file or extracted directory; its parent must
-// be removed by the caller when no longer needed.
+// Receive stores exactly size bytes under a private directory within base,
+// for the desktop to open: executables and scripts are refused. The
+// returned path is the safe file or extracted directory; its parent must be
+// removed by the caller when no longer needed.
 func Receive(name string, mode os.FileMode, size int64, src io.Reader, base string) (result string, err error) {
-	if size < 0 || size > MaxBytes {
-		return "", fmt.Errorf("invalid transfer size %d (limit %s)", size, HumanSize(MaxBytes))
-	}
-	if name != safeName(name) || name == "" || name == "." || name == ".." {
-		return "", fmt.Errorf("unsafe name: %q", name)
+	if err = checkIncoming(name, mode, size); err != nil {
+		return "", err
 	}
 	if mode.IsRegular() {
 		if err = safeFile(mode, name); err != nil {
 			return "", err
 		}
-	} else if mode.IsDir() {
-		if size < 1024 {
-			return "", fmt.Errorf("invalid tar archive size: %d", size)
-		}
-	} else {
-		return "", fmt.Errorf("unsafe file mode: %v", mode)
 	}
 	dir, err := os.MkdirTemp(base, "2o-")
 	if err != nil {
@@ -278,32 +298,142 @@ func Receive(name string, mode os.FileMode, size int64, src io.Reader, base stri
 		}
 	}()
 	result = filepath.Join(dir, name)
-	if mode.IsDir() {
-		if err = os.Mkdir(result, 0700); err != nil {
-			return "", err
-		}
-		err = extract(result, src, size)
-	} else {
-		var f *os.File
-		f, err = os.OpenFile(result, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err == nil {
-			err = copySafeFile(f, src, size)
-			if closeErr := f.Close(); err == nil {
-				err = closeErr
-			}
-		}
-	}
-	if err != nil {
+	if err = receiveInto(result, mode, size, src, true); err != nil {
 		return "", err
 	}
 	return result, nil
 }
 
+// ReceiveDownload saves exactly size bytes as name in dir, never replacing
+// anything there: a taken name becomes "name (1).ext", "name (2).ext"…
+// Contents are not vetted (the file is saved, not opened), but nothing is
+// made executable: files get mode 0666 and directories 0777, less the umask.
+// Until complete, the transfer lives in a hidden .2o-partial-* directory.
+func ReceiveDownload(name string, mode os.FileMode, size int64, src io.Reader, dir string) (string, error) {
+	if err := checkIncoming(name, mode, size); err != nil {
+		return "", err
+	}
+	stage, err := os.MkdirTemp(dir, ".2o-partial-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(stage)
+	staged := filepath.Join(stage, name)
+	if err = receiveInto(staged, mode, size, src, false); err != nil {
+		return "", err
+	}
+	return place(staged, dir, name, mode.IsDir())
+}
+
+func checkIncoming(name string, mode os.FileMode, size int64) error {
+	if size < 0 || size > MaxBytes {
+		return fmt.Errorf("invalid transfer size %d (limit %s)", size, HumanSize(MaxBytes))
+	}
+	if name != safeName(name) || name == "" || name == "." || name == ".." {
+		return fmt.Errorf("unsafe name: %q", name)
+	}
+	switch {
+	case mode.IsRegular():
+	case mode.IsDir():
+		if size < 1024 {
+			return fmt.Errorf("invalid tar archive size: %d", size)
+		}
+	default:
+		return fmt.Errorf("unsafe file mode: %v", mode)
+	}
+	return nil
+}
+
+// receiveInto writes the transfer at p, which must not exist.
+func receiveInto(p string, mode os.FileMode, size int64, src io.Reader, strict bool) error {
+	if mode.IsDir() {
+		if err := os.Mkdir(p, perms(strict, true)); err != nil {
+			return err
+		}
+		return extract(p, src, size, strict)
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perms(strict, false))
+	if err != nil {
+		return err
+	}
+	if strict {
+		err = copySafeFile(f, src, size)
+	} else {
+		_, err = io.CopyN(f, src, size)
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// perms: private for the open cache, ordinary (umask) for downloads.
+func perms(strict, dir bool) os.FileMode {
+	switch {
+	case strict && dir:
+		return 0700
+	case strict:
+		return 0600
+	case dir:
+		return 0777
+	}
+	return 0666
+}
+
+// maxPlaceTries bounds the "name (N)" search.
+const maxPlaceTries = 1000
+
+// place moves staged into dir under name, or the first free "name (N)". A
+// file is linked (link fails on any existing entry); a directory is renamed
+// after checking the name is free (rename could only replace an empty
+// directory created in between).
+func place(staged, dir, name string, isDir bool) (string, error) {
+	for i := range maxPlaceTries {
+		target := filepath.Join(dir, numbered(name, i, isDir))
+		var err error
+		if isDir {
+			if _, err = os.Lstat(target); err == nil {
+				continue
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				return "", err
+			}
+			err = os.Rename(staged, target)
+		} else {
+			err = os.Link(staged, target)
+		}
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return target, nil
+	}
+	return "", fmt.Errorf("%s and %d numbered copies already exist in %s", name, maxPlaceTries-1, dir)
+}
+
+// numbered is name for i = 0, else "base (i).ext" (directories have no extension).
+func numbered(name string, i int, isDir bool) string {
+	if i == 0 {
+		return name
+	}
+	base, ext := name, ""
+	if !isDir {
+		ext = filepath.Ext(name)
+		if ext == name { // ".bashrc"
+			ext = ""
+		}
+		base = strings.TrimSuffix(name, ext)
+	}
+	return fmt.Sprintf("%s (%d)%s", base, i, ext)
+}
+
 // extract unpacks a tar stream of exactly size bytes. Besides confining paths,
 // it never writes more file data than the announced size (sparse entries are
 // refused, since they expand beyond their transported bytes) and stops after
-// maxEntries entries.
-func extract(dst string, src io.Reader, size int64) error {
+// maxEntries entries. strict refuses executables and scripts.
+func extract(dst string, src io.Reader, size int64, strict bool) error {
 	root, err := os.OpenRoot(dst)
 	if err != nil {
 		return err
@@ -338,7 +468,7 @@ func extract(dst string, src io.Reader, size int64) error {
 		// The reader already maps legacy '\x00' entries to TypeReg or TypeDir.
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := root.MkdirAll(name, 0700); err != nil {
+			if err := root.MkdirAll(name, perms(strict, true)); err != nil {
 				return err
 			}
 		case tar.TypeReg:
@@ -346,18 +476,24 @@ func extract(dst string, src io.Reader, size int64) error {
 				return fmt.Errorf("archive entry %s (%s) expands beyond the announced transfer size of %s", name, HumanSize(h.Size), HumanSize(size))
 			}
 			budget -= h.Size
-			if err := safeFile(os.FileMode(h.Mode), path.Base(name)); err != nil {
-				return err
+			if strict {
+				if err := safeFile(os.FileMode(h.Mode), path.Base(name)); err != nil {
+					return err
+				}
 			}
 			parent := path.Dir(name)
-			if err := root.MkdirAll(parent, 0700); err != nil {
+			if err := root.MkdirAll(parent, perms(strict, true)); err != nil {
 				return err
 			}
-			f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perms(strict, false))
 			if err != nil {
 				return err
 			}
-			err = copySafeFile(f, tr, h.Size)
+			if strict {
+				err = copySafeFile(f, tr, h.Size)
+			} else {
+				_, err = io.CopyN(f, tr, h.Size)
+			}
 			if closeErr := f.Close(); err == nil {
 				err = closeErr
 			}

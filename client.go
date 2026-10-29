@@ -113,14 +113,35 @@ func openLocally(target string) error {
 
 // sendFile copies a file or directory to the desktop, which opens it.
 func sendFile(target string) error {
-	name, mode, size, r, err := files.Prepare(target)
+	return transfer(target, "open-file", files.Prepare, func(name, where, _ string) string {
+		return fmt.Sprintf("opened %s on %s", name, where)
+	})
+}
+
+// download copies each target into the desktop's download directory.
+func download(targets []string) error {
+	for _, t := range targets {
+		err := transfer(t, "download", files.PrepareDownload, func(name, where, path string) string {
+			return fmt.Sprintf("%s saved on %s in %s", name, where, path)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// transfer streams target to the desktop as op. done labels the success
+// from the name, the desktop and the path it reported.
+func transfer(target, op string, prepare func(string) (string, os.FileMode, int64, io.ReadCloser, error), done func(name, where, path string) string) error {
+	name, mode, size, r, err := prepare(target)
 	if err != nil {
 		return fileError(target, err)
 	}
 	defer r.Close()
 	where := targetDesktop()
 	s := ui.Start("sending %s (%s) to %s", name, humanSize(size), where)
-	c, err := request(wire.Message{Op: "open-file", Name: name, Mode: uint32(mode), Size: size})
+	c, err := request(wire.Message{Op: op, Name: name, Mode: uint32(mode), Size: size})
 	if err != nil {
 		s.Fail()
 		return err
@@ -149,12 +170,92 @@ func sendFile(target string) error {
 		}
 		return lostDesktop(where, "sending "+name, err)
 	}
-	if err = response(c); err != nil {
+	m, err := wire.Read(c)
+	if err == nil {
+		err = remoteErr(m)
+	} else {
+		err = lostDesktop(where, "waiting for its answer", err)
+	}
+	if err != nil {
 		s.Fail()
 		return err
 	}
-	s.DoneAs("opened %s on %s", name, where)
+	s.DoneAs("%s", done(name, where, m.Path))
 	return nil
+}
+
+// upload asks the desktop user to pick files (or folders) and saves them in
+// this machine's download directory.
+func upload(dirs bool) error {
+	dest, err := desktop.DownloadDir()
+	if err != nil {
+		return fail("cannot use the download directory").because(err).hint("%v", err).hint("set TWO_O_DOWNLOAD_DIR to an absolute path")
+	}
+	where := targetDesktop()
+	what := "files"
+	if dirs {
+		what = "folders"
+	}
+	s := ui.Start("waiting for you to pick %s on %s", what, where)
+	c, err := request(wire.Message{Op: "upload", Mode: uploadMode(dirs)})
+	if err != nil {
+		s.Fail()
+		return err
+	}
+	defer c.Close()
+	picking := true // s is the picker step until the first file arrives
+	for {
+		m, err := wire.Read(c)
+		if err != nil {
+			s.Fail()
+			return lostDesktop(where, "receiving files", err)
+		}
+		if m.Desktop != "" {
+			where = m.Desktop
+		}
+		if err = remoteErr(m); err != nil {
+			s.Fail()
+			return err
+		}
+		switch m.Op {
+		case "done":
+			if picking {
+				s.Skip("nothing picked on %s", where)
+			}
+			return nil
+		case "file":
+		default:
+			s.Fail()
+			return fail("the desktop daemon is older than this 2o (%s)", version).
+				hint("restart it on the desktop: 2o ssh reconnects with the new one").exit(exitUsage)
+		}
+		if picking {
+			s.DoneAs("picked on %s", where)
+			picking = false
+		}
+		shown := displayName(m.Name)
+		s = ui.Start("receiving %s (%s) from %s", shown, humanSize(m.Size), where)
+		var src io.Reader = c
+		if ui.Live() {
+			src = io.TeeReader(c, &progress{step: s, total: m.Size, label: func(p string) string {
+				return fmt.Sprintf("receiving %s from %s — %s", shown, where, p)
+			}})
+		}
+		path, err := files.ReceiveDownload(m.Name, os.FileMode(m.Mode), m.Size, src, dest)
+		if err != nil {
+			s.Fail()
+			return fail("could not save %s in %s", shown, dest).because(err).hint("%v", err)
+		}
+		s.DoneAs("%s saved in %s", shown, path)
+	}
+}
+
+// uploadMode tells the desktop which picker to show.
+func uploadMode(dirs bool) uint32 {
+	if dirs {
+		return uint32(os.ModeDir)
+	}
+	return 0
 }
 
 // connWriter remembers whether a copy failed on the connection side.
