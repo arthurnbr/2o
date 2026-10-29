@@ -1,6 +1,6 @@
 pkgbase = 2o
 	pkgdesc = Open files and URLs on your local desktop from a remote SSH shell
-	pkgver = 0.1.1
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/arthurnbr/2o
 	arch = x86_64
@@ -14,7 +14,7 @@ pkgbase = 2o
 	conflicts = 2o-bin
 	options = !debug
 	options = !strip
-	source = 2o-0.1.1.tar.gz::https://github.com/arthurnbr/2o/archive/refs/tags/v0.1.1.tar.gz
-	sha256sums = 8f2de9877329f5e069eecb2c174364e5e303431eef541264fbe0fa2f4717b944
+	source = 2o-0.2.0.tar.gz::https://github.com/arthurnbr/2o/archive/refs/tags/v0.2.0.tar.gz
+	sha256sums = 2725851b2e53da52b8f2428246f65b15cf561bd3cf00a0898cb590c05ce03b89
 
 pkgname = 2o

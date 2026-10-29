@@ -1,6 +1,6 @@
 pkgbase = 2o-bin
 	pkgdesc = Open files and URLs on your local desktop from a remote SSH shell (release binaries)
-	pkgver = 0.1.1
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/arthurnbr/2o
 	arch = x86_64
@@ -13,11 +13,11 @@ pkgbase = 2o-bin
 	conflicts = 2o-git
 	options = !debug
 	options = !strip
-	source = LICENSE-0.1.1::https://raw.githubusercontent.com/arthurnbr/2o/v0.1.1/LICENSE
+	source = LICENSE-0.2.0::https://raw.githubusercontent.com/arthurnbr/2o/v0.2.0/LICENSE
 	sha256sums = bc3d1a3c4429f818f58d3482b08f64d32a446d349bae59883ece3779b6aa291a
-	source_x86_64 = 2o-bin-0.1.1-x86_64.tar.gz::https://github.com/arthurnbr/2o/releases/download/v0.1.1/2o_0.1.1_linux_amd64.tar.gz
-	sha256sums_x86_64 = 756be0935843bc4b655c1904b23033c7adfea7220de98ec9c2b05bd3e8133a39
-	source_aarch64 = 2o-bin-0.1.1-aarch64.tar.gz::https://github.com/arthurnbr/2o/releases/download/v0.1.1/2o_0.1.1_linux_arm64.tar.gz
-	sha256sums_aarch64 = 5a952382de3b39903c43adc32f0aa902d5a381cab63c64257b9ecedf673e10b0
+	source_x86_64 = 2o-bin-0.2.0-x86_64.tar.gz::https://github.com/arthurnbr/2o/releases/download/v0.2.0/2o_0.2.0_linux_amd64.tar.gz
+	sha256sums_x86_64 = 5fc7ea450cd0b8645e6994a0b8c86387a0b608299fb45995fb821cba02c08a5c
+	source_aarch64 = 2o-bin-0.2.0-aarch64.tar.gz::https://github.com/arthurnbr/2o/releases/download/v0.2.0/2o_0.2.0_linux_arm64.tar.gz
+	sha256sums_aarch64 = a57b6c91226bd35de3571be66d4263102643d8eac5d97b1cb46ae505a7658da0
 
 pkgname = 2o-bin

@@ -2,11 +2,11 @@ cask "2o" do
   arch arm: "arm64", intel: "amd64"
   os macos: "darwin", linux: "linux"
 
-  version "0.1.1"
-  sha256 arm:          "42e39b3285b8389fbde9f9157f6c9361dc8ca495fe87868729e6ea8c84752131",
-         intel:        "4c1cba08b82e33e9e26cd4008c3a71e075b2ea3ff26a05fee8ec1a0a10acc8cd",
-         arm64_linux:  "5a952382de3b39903c43adc32f0aa902d5a381cab63c64257b9ecedf673e10b0",
-         x86_64_linux: "756be0935843bc4b655c1904b23033c7adfea7220de98ec9c2b05bd3e8133a39"
+  version "0.2.0"
+  sha256 arm:          "b31c3fcc2451e3555f55e5d83368a75a4bb0122f4c86620f45b7ebcaef0e9416",
+         intel:        "0c946062f6298f952206d655f613f5332b7a6f4234a17c286f8c9e58d44dfa06",
+         arm64_linux:  "a57b6c91226bd35de3571be66d4263102643d8eac5d97b1cb46ae505a7658da0",
+         x86_64_linux: "5fc7ea450cd0b8645e6994a0b8c86387a0b608299fb45995fb821cba02c08a5c"
 
   url "https://github.com/arthurnbr/2o/releases/download/v#{version}/2o_#{version}_#{os}_#{arch}.tar.gz"
   name "2o"

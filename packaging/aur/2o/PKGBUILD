@@ -1,6 +1,6 @@
 # Maintainer: Arthur Nobrega <arthur.nbga@gmail.com>
 pkgname=2o
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Open files and URLs on your local desktop from a remote SSH shell'
 arch=('x86_64' 'aarch64')
@@ -10,7 +10,7 @@ depends=('openssh' 'xdg-utils')
 makedepends=('go' 'make')
 conflicts=('2o-git' '2o-bin')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('8f2de9877329f5e069eecb2c174364e5e303431eef541264fbe0fa2f4717b944')
+sha256sums=('2725851b2e53da52b8f2428246f65b15cf561bd3cf00a0898cb590c05ce03b89')
 # Static, stripped binaries: `2o ssh` uploads them to remote servers,
 # including servers whose CPU differs from this machine's.
 options=('!debug' '!strip')
