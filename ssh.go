@@ -502,6 +502,65 @@ func sessionScript(dir, desktop string, command []string) string {
 	return s + strings.Join(command, " ")
 }
 
+// desktopTunnel is an open tunnel to the desktop on a server: the connection
+// master, the session held on the desktop daemon, and the session directory.
+type desktopTunnel struct {
+	c       *sshConn
+	dir     string
+	desktop string
+	release func()
+}
+
+// openDesktopTunnel is the bootstrap shared by `2o ssh` and `2o tunnel`:
+// desktop daemon, connection master, 2o on the server, then the tunnel.
+// notify receives the desktop session's hold events (see holdSession).
+func openDesktopTunnel(ctx context.Context, o sshOptions, notify func(error)) (*desktopTunnel, error) {
+	sock, err := startDaemon()
+	if err != nil {
+		return nil, err
+	}
+	master, daemonAddr, err := readKey(keyPath(sock))
+	if err != nil {
+		return nil, fail("cannot read the desktop daemon's key").hint("see its log: %s", daemonLog()).because(err)
+	}
+
+	// A static line: ssh may prompt for a password or host key right here.
+	step := ui.Begin("connecting to %s", o.host)
+	c, err := connectSSH(ctx, o)
+	if err != nil {
+		step.Fail()
+		return nil, err
+	}
+	step.Done()
+
+	uid, err := installRemote(c)
+	if err != nil {
+		c.close()
+		return nil, err
+	}
+	step = ui.Start("opening tunnel")
+	desktop := desktopLabel()
+	dir, release, err := openTunnel(c, sock, master, daemonAddr, uid, desktop, notify)
+	if err != nil {
+		step.Fail()
+		c.close()
+		return nil, err
+	}
+	step.Done()
+	return &desktopTunnel{c: c, dir: dir, desktop: desktop, release: release}, nil
+}
+
+// close removes the session directory, revokes the session on the desktop
+// and stops the connection master, even after an interrupt. It reports
+// whether the directory was removed (it is not when the connection is dead).
+func (t *desktopTunnel) close() bool {
+	t.c.ctx = context.Background()
+	_, err := t.c.run("rm -rf -- "+quote(t.dir), nil)
+	t.release()
+	t.c.close()
+	return err == nil
+}
+
 func sshSession(args []string) error {
 	o, err := parseSSH(args)
 	if err != nil {
@@ -517,42 +576,14 @@ func sshSession(args []string) error {
 	defer sig.stop()
 
 	ui.Header("2o → %s", o.host)
-	sock, err := startDaemon()
-	if err != nil {
-		return err
-	}
-	master, daemonAddr, err := readKey(keyPath(sock))
-	if err != nil {
-		return fail("cannot read the desktop daemon's key").hint("see its log: %s", daemonLog()).because(err)
-	}
-
-	// A static line: ssh may prompt for a password or host key right here.
-	step := ui.Begin("connecting to %s", o.host)
-	c, err := connectSSH(sig.ctx, o)
-	if err != nil {
-		step.Fail()
-		return sig.interrupted(err)
-	}
-	step.Done()
-	defer c.close()
-
-	uid, err := installRemote(c)
+	t, err := openDesktopTunnel(sig.ctx, o, holdNotice(o.host))
 	if err != nil {
 		return sig.interrupted(err)
 	}
-	step = ui.Start("opening tunnel")
-	desktop := desktopLabel()
-	dir, release, err := openTunnel(c, sock, master, daemonAddr, uid, desktop)
-	if err != nil {
-		step.Fail()
-		return sig.interrupted(err)
-	}
-	defer release()
-	defer func() { c.ctx = context.Background(); _, _ = c.run("rm -rf -- "+quote(dir), nil) }()
-	step.Done()
-	ui.Success("desktop tunnel ready — files, links and clipboard now open on %s", desktop)
+	defer t.close()
+	ui.Success("desktop tunnel ready — files, links and clipboard now open on %s", t.desktop)
 
-	err = runSession(c, o, sessionScript(dir, desktop, o.command), sig)
+	err = runSession(t.c, o, sessionScript(t.dir, t.desktop, o.command), sig)
 	ui.Note("tunnel closed")
 	return err
 }
@@ -837,7 +868,7 @@ func askRemoteUpdate(step *ui.Step, host string, remote buildInfo) (bool, error)
 
 // openTunnel holds a new session on the desktop daemon, forwards a server
 // port to it, writes the session directory, and checks the tunnel works.
-func openTunnel(c *sshConn, sock, master, daemonAddr, uid, desktop string) (dir string, release func(), err error) {
+func openTunnel(c *sshConn, sock, master, daemonAddr, uid, desktop string, notify func(error)) (dir string, release func(), err error) {
 	id, err := randomHex(12)
 	if err != nil {
 		return "", nil, err
@@ -846,7 +877,7 @@ func openTunnel(c *sshConn, sock, master, daemonAddr, uid, desktop string) (dir 
 	if err != nil {
 		return "", nil, err
 	}
-	release, err = holdSession(sock, master, id, token, desktop, holdNotice(c.host))
+	release, err = holdSession(sock, master, id, token, desktop, notify)
 	if err != nil {
 		return "", nil, fail("the desktop daemon refused the session").hint("see its log: %s", daemonLog()).because(err)
 	}
@@ -860,6 +891,12 @@ func openTunnel(c *sshConn, sock, master, daemonAddr, uid, desktop string) (dir 
 	file := "127.0.0.1:" + port + " " + id + " " + token + " " + desktop + "\n" // the token travels on stdin, never in argv
 	if _, err = c.run(setupScript(dir, desktop), strings.NewReader(file)); err != nil {
 		release()
+		// An interrupt kills the script before its trap: remove the directory
+		// (named with a fresh random id, so it can only be this session's).
+		ctx := c.ctx
+		c.ctx = context.Background()
+		_, _ = c.run("rm -rf -- "+quote(dir), nil)
+		c.ctx = ctx
 		u := fail("could not prepare the session on %s", c.host)
 		if re := (*remoteError)(nil); errors.As(err, &re) && re.code == exitNoTunnel {
 			u = fail("the tunnel to the desktop does not work").exit(exitNoTunnel)
